@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ instrument.symbol }} - K线图表</title>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #1e1e1e;
+            color: #fff;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        .header {
+            background-color: #2d2d2d;
+            padding: 15px 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header h1 {
+            margin: 0;
+            color: #fff;
+        }
+        .header .info {
+            color: #ccc;
+        }
+        .back-btn {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+        }
+        .back-btn:hover {
+            background-color: #45a049;
+        }
+        .chart-container {
+            background-color: #2d2d2d;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        .chart-title {
+            color: #fff;
+            margin-bottom: 10px;
+            font-size: 1.1em;
+        }
+        #klineChart, #macdChart, #rsiChart {
+            width: 100%;
+            height: 400px;
+        }
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #999;
+        }
+        .interval-selector {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            padding: 15px;
+            background-color: #2d2d2d;
+            border-radius: 8px;
+        }
+        .interval-btn {
+            padding: 8px 16px;
+            border: 1px solid #555;
+            background-color: #3d3d3d;
+            color: #fff;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .interval-btn:hover {
+            background-color: #4d4d4d;
+            border-color: #666;
+        }
+        .interval-btn.active {
+            background-color: #4CAF50;
+            border-color: #4CAF50;
+            color: #fff;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div>
+                <h1>{{ instrument.symbol }} - {{ instrument.name }}</h1>
+                <div class="info">{{ instrument.get_market_display }} | K线数据与技术指标</div>
+            </div>
+            <a href="{% url 'index' %}" class="back-btn">返回列表</a>
+        </div>
+
+        <div id="loading" class="loading">正在加载数据...</div>
+
+        <div id="charts" style="display: none;">
+            <!-- 时间粒度选择器 -->
+            <div class="interval-selector">
+                <span style="color: #ccc; margin-right: 10px; line-height: 34px;">时间粒度：</span>
+                <button class="interval-btn active" data-interval="daily" onclick="switchInterval('daily')">日K</button>
+                <button class="interval-btn" data-interval="1m" onclick="switchInterval('1m')">1分钟</button>
+                <button class="interval-btn" data-interval="5m" onclick="switchInterval('5m')">5分钟</button>
+                <button class="interval-btn" data-interval="15m" onclick="switchInterval('15m')">15分钟</button>
+                <button class="interval-btn" data-interval="30m" onclick="switchInterval('30m')">30分钟</button>
+                <button class="interval-btn" data-interval="60m" onclick="switchInterval('60m')">60分钟</button>
+            </div>
+            <!-- K线图 -->
+            <div class="chart-container">
+                <div class="chart-title">K线图 + 移动平均线 + 布林带</div>
+                <div id="klineChart"></div>
+            </div>
+
+            <!-- MACD图 -->
+            <div class="chart-container">
+                <div class="chart-title">MACD指标</div>
+                <div id="macdChart"></div>
+            </div>
+
+            <!-- RSI图 -->
+            <div class="chart-container">
+                <div class="chart-title">RSI指标</div>
+                <div id="rsiChart"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const symbol = '{{ instrument.symbol }}';
+        let currentInterval = 'daily';  // 当前选择的时间粒度
+        let charts = {};  // 存储图表实例
+        
+        // 切换时间粒度
+        function switchInterval(interval) {
+            // 更新按钮状态
+            document.querySelectorAll('.interval-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            document.querySelector(`[data-interval="${interval}"]`).classList.add('active');
+            
+            // 更新当前时间粒度
+            currentInterval = interval;
+            
+            // 显示加载状态
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('charts').style.display = 'none';
+            
+            // 重新加载数据
+            loadChartData(interval);
+        }
+        
+        // 加载图表数据
+        function loadChartData(interval) {
+            const url = `/api/data/${symbol}/?interval=${interval}`;
+            fetch(url)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        document.getElementById('loading').innerHTML = '错误: ' + data.error;
+                        return;
+                    }
+                    
+                    document.getElementById('loading').style.display = 'none';
+                    document.getElementById('charts').style.display = 'block';
+                    
+                    // 重新初始化所有图表
+                    initKlineChart(data);
+                    initMACDChart(data);
+                    initRSIChart(data);
+                })
+                .catch(error => {
+                    document.getElementById('loading').innerHTML = '加载失败: ' + error.message;
+                });
+        }
+        
+        // 初始加载
+        loadChartData(currentInterval);
+
+        function initKlineChart(data) {
+            // 如果图表已存在，先销毁
+            if (charts.kline) {
+                charts.kline.dispose();
+            }
+            const chart = echarts.init(document.getElementById('klineChart'), 'dark');
+            charts.kline = chart;
+            
+            const option = {
+                backgroundColor: 'transparent',
+                title: {
+                    text: `${data.name} (${data.symbol})`,
+                    left: 'center',
+                    textStyle: { color: '#fff' }
+                },
+                tooltip: {
+                    trigger: 'axis',
+                    axisPointer: { type: 'cross' }
+                },
+                legend: {
+                    data: ['K线', 'MA5', 'MA20', 'MA60', '布林上轨', '布林中轨', '布林下轨', '成交量'],
+                    top: 30,
+                    textStyle: { color: '#fff' }
+                },
+                grid: [
+                    { left: '10%', right: '8%', top: '15%', height: '50%' },
+                    { left: '10%', right: '8%', top: '70%', height: '15%' }
+                ],
+                xAxis: [
+                    {
+                        type: 'category',
+                        data: data.dates,
+                        scale: true,
+                        boundaryGap: false,
+                        axisLine: { onZero: false },
+                        splitLine: { show: false },
+                        min: 'dataMin',
+                        max: 'dataMax',
+                        axisLabel: { 
+                            color: '#999',
+                            rotate: 45,
+                            // 对于密集数据，只显示部分标签
+                            interval: function(index, value) {
+                                const total = data.dates.length;
+                                // 如果数据点超过500个，只显示1/10的标签
+                                if (total > 500) {
+                                    return index % 10 === 0;
+                                }
+                                // 如果数据点超过200个，只显示1/5的标签
+                                if (total > 200) {
+                                    return index % 5 === 0;
+                                }
+                                // 如果数据点超过100个，只显示1/3的标签
+                                if (total > 100) {
+                                    return index % 3 === 0;
+                                }
+                                return true;
+                            }
+                        }
+                    },
+                    {
+                        type: 'category',
+                        gridIndex: 1,
+                        data: data.dates,
+                        scale: true,
+                        boundaryGap: false,
+                        axisLine: { onZero: false },
+                        axisTick: { show: false },
+                        splitLine: { show: false },
+                        axisLabel: { show: false },
+                        min: 'dataMin',
+                        max: 'dataMax'
+                    }
+                ],
+                yAxis: [
+                    {
+                        scale: true,
+                        splitArea: { show: true },
+                        axisLabel: { color: '#999' }
+                    },
+                    {
+                        scale: true,
+                        gridIndex: 1,
+                        splitNumber: 2,
+                        axisLabel: { show: false },
+                        axisLine: { show: false },
+                        axisTick: { show: false },
+                        splitLine: { show: false }
+                    }
+                ],
+                dataZoom: [
+                    {
+                        type: 'inside',
+                        xAxisIndex: [0, 1],
+                        // 对于分钟数据（数据量>500），默认显示最后30%的数据
+                        start: data.dates.length > 500 ? 70 : 50,
+                        end: 100
+                    },
+                    {
+                        show: true,
+                        xAxisIndex: [0, 1],
+                        type: 'slider',
+                        top: '90%',
+                        // 对于分钟数据（数据量>500），默认显示最后30%的数据
+                        start: data.dates.length > 500 ? 70 : 50,
+                        end: 100,
+                        textStyle: { color: '#999' },
+                        // 数据量很大时，优化滑块显示
+                        filterMode: data.dates.length > 500 ? 'weakFilter' : 'filter'
+                    }
+                ],
+                series: [
+                    {
+                        name: 'K线',
+                        type: 'candlestick',
+                        data: data.kline,
+                        itemStyle: {
+                            color: '#26a69a',
+                            color0: '#ef5350',
+                            borderColor: '#26a69a',
+                            borderColor0: '#ef5350'
+                        }
+                    },
+                    {
+                        name: 'MA5',
+                        type: 'line',
+                        data: data.ma5,
+                        smooth: true,
+                        lineStyle: { width: 1, color: '#FFA500' },
+                        showSymbol: false
+                    },
+                    {
+                        name: 'MA20',
+                        type: 'line',
+                        data: data.ma20,
+                        smooth: true,
+                        lineStyle: { width: 1, color: '#00BFFF' },
+                        showSymbol: false
+                    },
+                    {
+                        name: 'MA60',
+                        type: 'line',
+                        data: data.ma60,
+                        smooth: true,
+                        lineStyle: { width: 1, color: '#FF1493' },
+                        showSymbol: false
+                    },
+                    {
+                        name: '布林上轨',
+                        type: 'line',
+                        data: data.bbu,
+                        smooth: true,
+                        lineStyle: { width: 1, color: '#9E9E9E', type: 'dashed' },
+                        showSymbol: false
+                    },
+                    {
+                        name: '布林中轨',
+                        type: 'line',
+                        data: data.bbm,
+                        smooth: true,
+                        lineStyle: { width: 1, color: '#9E9E9E' },
+                        showSymbol: false
+                    },
+                    {
+                        name: '布林下轨',
+                        type: 'line',
+                        data: data.bbl,
+                        smooth: true,
+                        lineStyle: { width: 1, color: '#9E9E9E', type: 'dashed' },
+                        showSymbol: false
+                    },
+                    {
+                        name: '成交量',
+                        type: 'bar',
+                        xAxisIndex: 1,
+                        yAxisIndex: 1,
+                        data: data.volume,
+                        itemStyle: {
+                            color: function(params) {
+                                const kline = data.kline[params.dataIndex];
+                                return kline[1] >= kline[0] ? '#26a69a' : '#ef5350';
+                            }
+                        }
+                    }
+                ]
+            };
+            
+            chart.setOption(option);
+            window.addEventListener('resize', () => chart.resize());
+        }
+
+        function initMACDChart(data) {
+            // 如果图表已存在，先销毁
+            if (charts.macd) {
+                charts.macd.dispose();
+            }
+            const chart = echarts.init(document.getElementById('macdChart'), 'dark');
+            charts.macd = chart;
+            
+            const option = {
+                backgroundColor: 'transparent',
+                tooltip: {
+                    trigger: 'axis',
+                    axisPointer: { type: 'cross' }
+                },
+                legend: {
+                    data: ['MACD', 'Signal', 'Histogram'],
+                    textStyle: { color: '#fff' }
+                },
+                grid: {
+                    left: '10%',
+                    right: '8%',
+                    top: '10%',
+                    bottom: '15%'
+                },
+                xAxis: {
+                    type: 'category',
+                    data: data.dates,
+                    axisLabel: { color: '#999', rotate: 45 }
+                },
+                yAxis: {
+                    type: 'value',
+                    axisLabel: { color: '#999' }
+                },
+                dataZoom: [{
+                    type: 'inside',
+                    start: 50,
+                    end: 100
+                }, {
+                    type: 'slider',
+                    start: 50,
+                    end: 100,
+                    textStyle: { color: '#999' }
+                }],
+                series: [
+                    {
+                        name: 'MACD',
+                        type: 'line',
+                        data: data.macd,
+                        smooth: true,
+                        lineStyle: { color: '#FFD700' },
+                        showSymbol: false
+                    },
+                    {
+                        name: 'Signal',
+                        type: 'line',
+                        data: data.macd_signal,
+                        smooth: true,
+                        lineStyle: { color: '#FF69B4' },
+                        showSymbol: false
+                    },
+                    {
+                        name: 'Histogram',
+                        type: 'bar',
+                        data: data.macd_hist,
+                        itemStyle: {
+                            color: function(params) {
+                                return params.value >= 0 ? '#26a69a' : '#ef5350';
+                            }
+                        }
+                    }
+                ]
+            };
+            
+            chart.setOption(option);
+            window.addEventListener('resize', () => chart.resize());
+        }
+
+        function initRSIChart(data) {
+            // 如果图表已存在，先销毁
+            if (charts.rsi) {
+                charts.rsi.dispose();
+            }
+            const chart = echarts.init(document.getElementById('rsiChart'), 'dark');
+            charts.rsi = chart;
+            
+            const option = {
+                backgroundColor: 'transparent',
+                tooltip: {
+                    trigger: 'axis',
+                    axisPointer: { type: 'cross' }
+                },
+                legend: {
+                    data: ['RSI'],
+                    textStyle: { color: '#fff' }
+                },
+                grid: {
+                    left: '10%',
+                    right: '8%',
+                    top: '10%',
+                    bottom: '15%'
+                },
+                xAxis: {
+                    type: 'category',
+                    data: data.dates,
+                    axisLabel: { color: '#999', rotate: 45 }
+                },
+                yAxis: {
+                    type: 'value',
+                    min: 0,
+                    max: 100,
+                    axisLabel: { color: '#999' },
+                    splitLine: {
+                        lineStyle: {
+                            color: '#333'
+                        }
+                    },
+                    markLine: {
+                        data: [
+                            { yAxis: 70, name: '超买', lineStyle: { color: '#ef5350', type: 'dashed' } },
+                            { yAxis: 30, name: '超卖', lineStyle: { color: '#26a69a', type: 'dashed' } }
+                        ]
+                    }
+                },
+                dataZoom: [{
+                    type: 'inside',
+                    start: 50,
+                    end: 100
+                }, {
+                    type: 'slider',
+                    start: 50,
+                    end: 100,
+                    textStyle: { color: '#999' }
+                }],
+                series: [
+                    {
+                        name: 'RSI',
+                        type: 'line',
+                        data: data.rsi,
+                        smooth: true,
+                        lineStyle: { color: '#9C27B0' },
+                        areaStyle: {
+                            color: {
+                                type: 'linear',
+                                x: 0, y: 0, x2: 0, y2: 1,
+                                colorStops: [
+                                    { offset: 0, color: 'rgba(156, 39, 176, 0.3)' },
+                                    { offset: 1, color: 'rgba(156, 39, 176, 0.1)' }
+                                ]
+                            }
+                        },
+                        showSymbol: false
+                    }
+                ]
+            };
+            
+            chart.setOption(option);
+            window.addEventListener('resize', () => chart.resize());
+        }
+    </script>
+</body>
+</html>
+

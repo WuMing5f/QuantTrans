@@ -3,124 +3,405 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>量化交易系统</title>
+    <title>量化交易系统 - 板块轮动</title>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
     <style>
         body {
             font-family: Arial, sans-serif;
-            margin: 20px;
-            background-color: #f5f5f5;
+            margin: 0;
+            padding: 20px;
+            background-color: #1e1e1e;
+            color: #fff;
         }
         .container {
-            max-width: 1200px;
+            max-width: 1400px;
             margin: 0 auto;
-            background-color: white;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
-        h1 {
-            color: #333;
-            border-bottom: 2px solid #4CAF50;
-            padding-bottom: 10px;
-        }
-        .instrument-list {
-            list-style: none;
-            padding: 0;
-        }
-        .instrument-item {
-            background-color: #f9f9f9;
-            margin: 10px 0;
-            padding: 15px;
-            border-radius: 5px;
-            border-left: 4px solid #4CAF50;
+        .header {
             display: flex;
             justify-content: space-between;
             align-items: center;
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 2px solid #4CAF50;
         }
-        .instrument-item:hover {
-            background-color: #f0f0f0;
+        .header h1 {
+            margin: 0;
+            color: #fff;
         }
-        .instrument-info {
-            flex: 1;
+        .nav-buttons {
+            display: flex;
+            gap: 10px;
         }
-        .instrument-symbol {
-            font-weight: bold;
-            font-size: 1.2em;
-            color: #333;
-        }
-        .instrument-name {
-            color: #666;
-            margin-left: 10px;
-        }
-        .instrument-market {
-            display: inline-block;
-            padding: 3px 8px;
-            border-radius: 3px;
-            font-size: 0.9em;
-            margin-left: 10px;
-        }
-        .market-us {
-            background-color: #2196F3;
-            color: white;
-        }
-        .market-cn {
-            background-color: #FF9800;
-            color: white;
-        }
-        .view-chart-btn {
+        .nav-btn {
             background-color: #4CAF50;
             color: white;
+            padding: 10px 20px;
             border: none;
-            padding: 8px 16px;
-            border-radius: 4px;
+            border-radius: 5px;
             cursor: pointer;
             text-decoration: none;
             display: inline-block;
         }
-        .view-chart-btn:hover {
+        .nav-btn:hover {
             background-color: #45a049;
         }
-        .empty-state {
+        .period-selector {
+            margin: 20px 0;
+            padding: 15px;
+            background-color: #2d2d2d;
+            border-radius: 5px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .period-selector span {
+            color: #ccc;
+        }
+        .period-btn {
+            padding: 8px 16px;
+            border: 1px solid #555;
+            background-color: #333;
+            color: #ccc;
+            border-radius: 3px;
+            cursor: pointer;
+            text-decoration: none;
+        }
+        .period-btn:hover {
+            background-color: #444;
+        }
+        .period-btn.active {
+            background-color: #4CAF50;
+            color: white;
+            border-color: #4CAF50;
+        }
+        .charts-container {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        .chart-box {
+            background-color: #2d2d2d;
+            border-radius: 8px;
+            padding: 20px;
+        }
+        .chart-title {
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 15px;
+            color: #4CAF50;
+        }
+        .chart-container {
+            height: 400px;
+        }
+        .sector-table {
+            width: 100%;
+            background-color: #2d2d2d;
+            border-radius: 8px;
+            padding: 20px;
+            margin-top: 20px;
+        }
+        .sector-table h2 {
+            margin-top: 0;
+            color: #4CAF50;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #444;
+        }
+        th {
+            background-color: #333;
+            color: #4CAF50;
+            font-weight: bold;
+        }
+        tr:hover {
+            background-color: #333;
+        }
+        .positive {
+            color: #26a69a;
+        }
+        .negative {
+            color: #ef5350;
+        }
+        .sector-tag {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 0.9em;
+            font-weight: bold;
+        }
+        .hot-sector {
+            background-color: #ef5350;
+            color: white;
+        }
+        .cold-sector {
+            background-color: #2196F3;
+            color: white;
+        }
+        .etf-link {
+            color: #4CAF50;
+            text-decoration: none;
+            margin-right: 10px;
+        }
+        .etf-link:hover {
+            text-decoration: underline;
+        }
+        .summary-stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+        .stat-card {
+            background-color: #2d2d2d;
+            padding: 20px;
+            border-radius: 8px;
             text-align: center;
-            padding: 40px;
+        }
+        .stat-value {
+            font-size: 32px;
+            font-weight: bold;
+            color: #4CAF50;
+        }
+        .stat-label {
             color: #999;
+            margin-top: 10px;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>量化交易系统 Dashboard</h1>
-        
-        <div style="margin: 20px 0; padding: 15px; background-color: #e3f2fd; border-radius: 5px;">
-            <h3 style="margin-top: 0;">快速导航</h3>
-            <a href="{% url 'etf_overview' %}" class="view-chart-btn" style="margin-right: 10px;">A股ETF概览</a>
-            <a href="{% url 'us_stocks_overview' %}" class="view-chart-btn">美股龙头概览</a>
+        <div class="header">
+            <h1>量化交易系统 - 板块轮动分析</h1>
+            <div class="nav-buttons">
+                <a href="{% url 'etf_overview' %}" class="nav-btn">A股ETF概览</a>
+                <a href="{% url 'us_stocks_overview' %}" class="nav-btn">美股龙头概览</a>
+            </div>
         </div>
-        
-        <h2>标的列表</h2>
-        {% if instruments %}
-        <ul class="instrument-list">
-            {% for instrument in instruments %}
-            <li class="instrument-item">
-                <div class="instrument-info">
-                    <span class="instrument-symbol">{{ instrument.symbol }}</span>
-                    <span class="instrument-name">{{ instrument.name }}</span>
-                    <span class="instrument-market market-{{ instrument.market|lower }}">
-                        {{ instrument.get_market_display }}
-                    </span>
-                </div>
-                <a href="{% url 'chart' instrument.symbol %}" class="view-chart-btn">查看图表</a>
-            </li>
+
+        <div class="period-selector">
+            <span>时间段：</span>
+            {% for p_value, p_label in available_periods %}
+            <a href="?period={{ p_value }}" class="period-btn {% if current_period == p_value %}active{% endif %}">
+                {{ p_label }}
+            </a>
             {% endfor %}
-        </ul>
+        </div>
+
+        {% if sectors %}
+        <div class="summary-stats">
+            <div class="stat-card">
+                <div class="stat-value">{{ sectors|length }}</div>
+                <div class="stat-label">行业板块数</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value positive">
+                    {% if hot_sector %}{% if hot_sector.avg_change > 0 %}+{% endif %}{{ hot_sector.avg_change|floatformat:2 }}%{% else %}0.00%{% endif %}
+                </div>
+                <div class="stat-label">最热板块 {% if hot_sector %}({{ hot_sector.category }}){% endif %}</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value negative">
+                    {% if cold_sector %}{% if cold_sector.avg_change < 0 %}{% else %}+{% endif %}{{ cold_sector.avg_change|floatformat:2 }}%{% else %}0.00%{% endif %}
+                </div>
+                <div class="stat-label">最冷板块 {% if cold_sector %}({{ cold_sector.category }}){% endif %}</div>
+            </div>
+        </div>
+
+        <div class="charts-container">
+            <div class="chart-box">
+                <div class="chart-title">板块涨跌幅排行（{{ period_label }}）</div>
+                <div id="sectorChart" class="chart-container"></div>
+            </div>
+            <div class="chart-box">
+                <div class="chart-title">板块分布（涨跌占比）</div>
+                <div id="pieChart" class="chart-container"></div>
+            </div>
+        </div>
+
+        <div class="sector-table">
+            <h2>板块详细数据</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>排名</th>
+                        <th>板块</th>
+                        <th>平均涨跌幅</th>
+                        <th>最高涨跌幅</th>
+                        <th>最低涨跌幅</th>
+                        <th>ETF数量</th>
+                        <th>ETF列表</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for sector in sectors %}
+                    <tr>
+                        <td>
+                            <span class="sector-tag {% if forloop.counter <= 3 %}hot-sector{% elif forloop.counter > sectors|length|add:'-3' %}cold-sector{% endif %}">
+                                {{ forloop.counter }}
+                            </span>
+                        </td>
+                        <td><strong>{{ sector.category }}</strong></td>
+                        <td class="{% if sector.avg_change >= 0 %}positive{% else %}negative{% endif %}">
+                            {% if sector.avg_change >= 0 %}+{% endif %}{{ sector.avg_change|floatformat:2 }}%
+                        </td>
+                        <td class="positive">
+                            +{{ sector.max_change|floatformat:2 }}%
+                        </td>
+                        <td class="negative">
+                            {{ sector.min_change|floatformat:2 }}%
+                        </td>
+                        <td>{{ sector.etf_count }}</td>
+                        <td>
+                            {% for etf in sector.etfs %}
+                            <a href="{% url 'chart' etf.symbol %}" class="etf-link" title="{{ etf.name }}">
+                                {{ etf.symbol }}
+                                <span style="font-size: 0.85em; color: {% if etf.change_pct >= 0 %}#26a69a{% else %}#ef5350{% endif %};">
+                                    ({% if etf.change_pct >= 0 %}+{% endif %}{{ etf.change_pct|floatformat:1 }}%)
+                                </span>
+                            </a>
+                            {% endfor %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <script>
+            // 准备数据
+            const sectorData = [
+                {% for sector in sectors %}
+                {
+                    name: '{{ sector.category }}',
+                    value: {{ sector.avg_change|floatformat:2 }},
+                    etfCount: {{ sector.etf_count }},
+                    maxChange: {{ sector.max_change|floatformat:2 }},
+                    minChange: {{ sector.min_change|floatformat:2 }}
+                }{% if not forloop.last %},{% endif %}
+                {% endfor %}
+            ];
+
+            // 按涨跌幅排序（降序）
+            sectorData.sort((a, b) => b.value - a.value);
+
+            // 柱状图
+            const barChart = echarts.init(document.getElementById('sectorChart'));
+            const barOption = {
+                backgroundColor: 'transparent',
+                tooltip: {
+                    trigger: 'axis',
+                    axisPointer: { type: 'shadow' },
+                    formatter: function(params) {
+                        const data = params[0];
+                        return `${data.name}<br/>平均涨跌幅: ${data.value >= 0 ? '+' : ''}${data.value.toFixed(2)}%<br/>ETF数量: ${data.data.etfCount}`;
+                    }
+                },
+                grid: {
+                    left: '10%',
+                    right: '10%',
+                    top: '10%',
+                    bottom: '15%'
+                },
+                xAxis: {
+                    type: 'category',
+                    data: sectorData.map(d => d.name),
+                    axisLabel: {
+                        rotate: 45,
+                        color: '#999'
+                    }
+                },
+                yAxis: {
+                    type: 'value',
+                    name: '涨跌幅 (%)',
+                    axisLabel: {
+                        color: '#999',
+                        formatter: '{value}%'
+                    },
+                    splitLine: {
+                        lineStyle: { color: '#333' }
+                    }
+                },
+                series: [{
+                    name: '平均涨跌幅',
+                    type: 'bar',
+                    data: sectorData.map(d => ({
+                        value: d.value,
+                        etfCount: d.etfCount,
+                        itemStyle: {
+                            color: d.value >= 0 ? '#26a69a' : '#ef5350'
+                        }
+                    })),
+                    label: {
+                        show: true,
+                        position: 'top',
+                        color: '#fff',
+                        formatter: function(params) {
+                            return (params.value >= 0 ? '+' : '') + params.value.toFixed(2) + '%';
+                        }
+                    }
+                }]
+            };
+            barChart.setOption(barOption);
+
+            // 饼图（涨跌分布）
+            const pieChart = echarts.init(document.getElementById('pieChart'));
+            const upCount = sectorData.filter(d => d.value >= 0).length;
+            const downCount = sectorData.filter(d => d.value < 0).length;
+            const pieOption = {
+                backgroundColor: 'transparent',
+                tooltip: {
+                    trigger: 'item',
+                    formatter: '{b}: {c} ({d}%)'
+                },
+                legend: {
+                    orient: 'vertical',
+                    left: 'left',
+                    textStyle: { color: '#fff' }
+                },
+                series: [{
+                    name: '板块数量',
+                    type: 'pie',
+                    radius: '60%',
+                    data: [
+                        { value: upCount, name: '上涨板块', itemStyle: { color: '#26a69a' } },
+                        { value: downCount, name: '下跌板块', itemStyle: { color: '#ef5350' } }
+                    ],
+                    emphasis: {
+                        itemStyle: {
+                            shadowBlur: 10,
+                            shadowOffsetX: 0,
+                            shadowColor: 'rgba(0, 0, 0, 0.5)'
+                        }
+                    },
+                    label: {
+                        color: '#fff'
+                    }
+                }]
+            };
+            pieChart.setOption(pieOption);
+
+            // 响应式
+            window.addEventListener('resize', () => {
+                barChart.resize();
+                pieChart.resize();
+            });
+        </script>
         {% else %}
-        <div class="empty-state">
-            <p>暂无数据</p>
-            <p>请使用命令同步数据：</p>
-            <code>python manage.py sync_data --symbol 510300 --market CN --start 2023-12-01 --end 2023-12-31</code>
+        <div style="text-align: center; padding: 40px; color: #999;">
+            <p>暂无板块数据</p>
+            <p>请先同步ETF数据：</p>
+            <code style="background-color: #2d2d2d; padding: 10px; border-radius: 5px; display: inline-block; margin-top: 10px;">
+                python manage.py batch_sync --type etf --start 2022-01-01
+            </code>
         </div>
         {% endif %}
     </div>
 </body>
 </html>
-

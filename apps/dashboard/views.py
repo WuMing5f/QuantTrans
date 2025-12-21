@@ -8,10 +8,102 @@ import json
 
 
 def index(request):
-    """首页"""
-    instruments = Instrument.objects.all()[:10]
+    """首页 - 板块轮动图表"""
+    from datetime import timedelta
+    from django.db.models import Q
+    
+    # 获取时间段参数（默认1周）
+    period = request.GET.get('period', '1w')
+    period_days = {
+        '1w': 7,
+        '1m': 30,
+        '3m': 90,
+        'all': None,
+    }
+    period_name = {
+        '1w': '1周',
+        '1m': '1个月',
+        '3m': '3个月',
+        'all': '全部',
+    }
+    days = period_days.get(period, 7)
+    period_label = period_name.get(period, '1周')
+    
+    # 获取所有有数据的A股ETF（排除宽基指数）
+    etfs = Instrument.objects.filter(
+        market='CN',
+        candles__isnull=False,
+        category__isnull=False
+    ).exclude(category='宽基指数').distinct().order_by('category', 'symbol')
+    
+    # 按行业分类统计
+    from collections import defaultdict
+    sector_stats = defaultdict(lambda: {
+        'etfs': [],
+        'change_pcts': [],
+        'avg_change': 0,
+        'etf_count': 0,
+    })
+    
+    for etf in etfs:
+        candles = Candle.objects.filter(instrument=etf).order_by('date')
+        if not candles.exists():
+            continue
+            
+        latest = candles.last()
+        
+        # 根据时间段筛选数据
+        if days is None:
+            period_first = candles.first()
+        else:
+            period_start = latest.date - timedelta(days=days)
+            period_candles = candles.filter(date__gte=period_start)
+            period_first = period_candles.first() if period_candles.exists() else candles.first()
+        
+        if period_first and latest and period_first.date < latest.date:
+            change_pct = ((float(latest.close) - float(period_first.close)) / float(period_first.close)) * 100
+            
+            category = etf.category or '未分类'
+            sector_stats[category]['etfs'].append({
+                'symbol': etf.symbol,
+                'name': etf.name,
+                'change_pct': change_pct,
+            })
+            sector_stats[category]['change_pcts'].append(change_pct)
+    
+    # 计算每个板块的平均涨跌幅
+    sector_list = []
+    for category, stats in sector_stats.items():
+        if stats['change_pcts']:
+            avg_change = sum(stats['change_pcts']) / len(stats['change_pcts'])
+            sector_list.append({
+                'category': category,
+                'avg_change': avg_change,
+                'etf_count': len(stats['etfs']),
+                'etfs': sorted(stats['etfs'], key=lambda x: x['change_pct'], reverse=True),
+                'max_change': max(stats['change_pcts']),
+                'min_change': min(stats['change_pcts']),
+            })
+    
+    # 按平均涨跌幅排序（热点在前）
+    sector_list.sort(key=lambda x: x['avg_change'], reverse=True)
+    
+    # 获取最热和最冷板块（用于统计卡片）
+    hot_sector = sector_list[0] if sector_list else None
+    cold_sector = sector_list[-1] if sector_list else None
+    
     context = {
-        'instruments': instruments,
+        'sectors': sector_list,
+        'hot_sector': hot_sector,
+        'cold_sector': cold_sector,
+        'period_label': period_label,
+        'current_period': period,
+        'available_periods': [
+            ('1w', '1周'),
+            ('1m', '1个月'),
+            ('3m', '3个月'),
+            ('all', '全部'),
+        ],
     }
     return render(request, 'dashboard/index.html', context)
 
@@ -257,9 +349,15 @@ def get_chart_data(request, symbol):
                     # naive datetime，假设已经是北京时间
                     dt_beijing = beijing_tz.localize(dt)
                 
+                # 处理异常数据：如果开盘价为0，使用前一条的收盘价或当前收盘价
+                open_price = float(candle.open)
+                if open_price == 0 or open_price < 0.1:
+                    # 如果开盘价异常，使用收盘价替代（可能是数据源的问题）
+                    open_price = float(candle.close)
+                
                 data_list.append({
                     'date': dt_beijing.isoformat(),
-                    'open': float(candle.open),
+                    'open': open_price,
                     'high': float(candle.high),
                     'low': float(candle.low),
                     'close': float(candle.close),

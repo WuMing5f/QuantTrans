@@ -4,8 +4,8 @@ from .models import Instrument, Candle, CandleMinute
 
 @admin.register(Instrument)
 class InstrumentAdmin(admin.ModelAdmin):
-    list_display = ('symbol', 'market', 'name', 'category', 'created_at', 'updated_at')
-    list_filter = ('market', 'category', 'created_at')
+    list_display = ('symbol', 'market', 'name', 'category', 'trading_rule', 'created_at', 'updated_at')
+    list_filter = ('market', 'category', 'trading_rule', 'created_at')
     search_fields = ('symbol', 'name', 'category')
 
 

@@ -208,9 +208,13 @@
                     axisPointer: { type: 'cross' }
                 },
                 legend: {
-                    data: ['K线', 'MA5', 'MA20', 'MA60', '布林上轨', '布林中轨', '布林下轨', '成交量'],
+                    data: ['K线', 'MA5', 'MA20', 'MA60', '布林上轨', '布林中轨', '布林下轨', '成交量(涨)', '成交量(跌)'],
                     top: 30,
-                    textStyle: { color: '#fff' }
+                    textStyle: { color: '#fff' },
+                    selected: {
+                        '成交量(涨)': true,
+                        '成交量(跌)': true
+                    }
                 },
                 grid: [
                     { left: '10%', right: '8%', top: '15%', height: '50%' },
@@ -360,17 +364,32 @@
                         showSymbol: false
                     },
                     {
-                        name: '成交量',
+                        name: '成交量(涨)',
                         type: 'bar',
                         xAxisIndex: 1,
                         yAxisIndex: 1,
-                        data: data.volume,
+                        data: data.volume.map((v, i) => {
+                            const kline = data.kline[i];
+                            return kline[1] >= kline[0] ? v : 0;  // 只显示上涨的成交量
+                        }),
                         itemStyle: {
-                            color: function(params) {
-                                const kline = data.kline[params.dataIndex];
-                                return kline[1] >= kline[0] ? '#26a69a' : '#ef5350';
-                            }
-                        }
+                            color: '#26a69a'  // 绿色表示上涨
+                        },
+                        stack: 'volume'
+                    },
+                    {
+                        name: '成交量(跌)',
+                        type: 'bar',
+                        xAxisIndex: 1,
+                        yAxisIndex: 1,
+                        data: data.volume.map((v, i) => {
+                            const kline = data.kline[i];
+                            return kline[1] < kline[0] ? v : 0;  // 只显示下跌的成交量
+                        }),
+                        itemStyle: {
+                            color: '#ef5350'  // 红色表示下跌
+                        },
+                        stack: 'volume'
                     }
                 ]
             };

@@ -13,6 +13,14 @@ class Instrument(models.Model):
     market = models.CharField(max_length=2, choices=MARKET_CHOICES, verbose_name='市场')
     name = models.CharField(max_length=100, verbose_name='名称')
     category = models.CharField(max_length=50, blank=True, null=True, verbose_name='行业分类')
+    trading_rule = models.CharField(
+        max_length=3,
+        choices=[('T+0', 'T+0'), ('T+1', 'T+1')],
+        default='T+1',
+        blank=True,
+        null=True,
+        verbose_name='交易规则'
+    )
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
     updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
     

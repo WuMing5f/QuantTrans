@@ -220,6 +220,12 @@ class AkShareCNProvider(DataProvider):
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
         
+        # 修复异常的开盘价：如果开盘价为0或异常，使用收盘价替代
+        # 这可能是akshare数据源的问题
+        if 'open' in df.columns and 'close' in df.columns:
+            mask = (df['open'] == 0) | (df['open'] < 0.1) | df['open'].isna()
+            df.loc[mask, 'open'] = df.loc[mask, 'close']
+        
         # 确保amount列存在
         if 'amount' not in df.columns and 'close' in df.columns and 'volume' in df.columns:
             df['amount'] = df['close'] * df['volume']

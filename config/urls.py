@@ -1,4 +1,6 @@
-"""QuantTrader URL Configuration"""
+"""
+Django URL配置
+"""
 from django.contrib import admin
 from django.urls import path, include
 

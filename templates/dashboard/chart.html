@@ -96,13 +96,21 @@
 </head>
 <body>
     <div class="container">
-        <div class="header">
-            <div>
-                <h1>{{ instrument.symbol }} - {{ instrument.name }}</h1>
-                <div class="info">{{ instrument.get_market_display }} | K线数据与技术指标</div>
+    <div class="header">
+        <div>
+            <h1>{{ instrument.symbol }} - {{ instrument.name }}</h1>
+            <div class="info">
+                {{ instrument.get_market_display }} | 
+                {% if instrument.trading_rule == 'T+0' %}
+                    <span style="background-color: #9c27b0; color: white; padding: 2px 6px; border-radius: 3px; font-size: 0.9em; font-weight: bold;">T+0</span>
+                {% else %}
+                    <span style="background-color: #607d8b; color: white; padding: 2px 6px; border-radius: 3px; font-size: 0.9em;">T+1</span>
+                {% endif %}
+                | K线数据与技术指标
             </div>
-            <a href="{% url 'index' %}" class="back-btn">返回列表</a>
         </div>
+        <a href="{% url 'index' %}" class="back-btn">返回列表</a>
+    </div>
 
         <div id="loading" class="loading">正在加载数据...</div>
 

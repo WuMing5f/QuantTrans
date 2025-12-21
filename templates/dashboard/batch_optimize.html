@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>批量策略优化 - 量化交易系统</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #1e1e1e 0%, #2d2d2d 100%);
+            color: #fff;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+            padding: 20px;
+            background: rgba(76, 175, 80, 0.1);
+            border-radius: 10px;
+            border: 1px solid rgba(76, 175, 80, 0.3);
+        }
+        
+        h1 {
+            color: #4CAF50;
+            font-size: 2em;
+        }
+        
+        .btn {
+            padding: 10px 20px;
+            background: #4CAF50;
+            color: #fff;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 1em;
+            transition: background 0.3s;
+        }
+        
+        .btn:hover {
+            background: #45a049;
+        }
+        
+        .btn:disabled {
+            background: #666;
+            cursor: not-allowed;
+        }
+        
+        .config-section {
+            background: #2d2d2d;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            border: 1px solid #444;
+        }
+        
+        .form-group {
+            margin-bottom: 15px;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            color: #4CAF50;
+            font-weight: bold;
+        }
+        
+        .form-group input,
+        .form-group select {
+            width: 100%;
+            padding: 10px;
+            background: #1e1e1e;
+            border: 1px solid #555;
+            border-radius: 5px;
+            color: #fff;
+            font-size: 1em;
+        }
+        
+        .form-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+        }
+        
+        .info-box {
+            background: rgba(76, 175, 80, 0.1);
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            border-left: 4px solid #4CAF50;
+        }
+        
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 40px;
+            background: #2d2d2d;
+            border-radius: 10px;
+            margin: 20px 0;
+        }
+        
+        .loading.active {
+            display: block;
+        }
+        
+        .spinner {
+            border: 4px solid #333;
+            border-top: 4px solid #4CAF50;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .results-section {
+            display: none;
+            margin-top: 20px;
+        }
+        
+        .results-section.active {
+            display: block;
+        }
+        
+        .summary-table {
+            width: 100%;
+            border-collapse: collapse;
+            background: #2d2d2d;
+            border-radius: 10px;
+            overflow: hidden;
+            margin-bottom: 20px;
+        }
+        
+        .summary-table th,
+        .summary-table td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #444;
+        }
+        
+        .summary-table th {
+            background: #1e1e1e;
+            color: #4CAF50;
+            font-weight: bold;
+        }
+        
+        .summary-table tr:hover {
+            background: #333;
+        }
+        
+        .positive {
+            color: #4CAF50;
+        }
+        
+        .negative {
+            color: #ef5350;
+        }
+        
+        .strategy-badge {
+            display: inline-block;
+            padding: 4px 8px;
+            background: #4CAF50;
+            color: #fff;
+            border-radius: 4px;
+            font-size: 0.85em;
+            margin-right: 5px;
+        }
+        
+        .error {
+            display: none;
+            padding: 15px;
+            background: rgba(239, 83, 80, 0.1);
+            border: 1px solid #ef5350;
+            border-radius: 5px;
+            color: #ef5350;
+            margin: 20px 0;
+        }
+        
+        .error.active {
+            display: block;
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        
+        .stat-card {
+            background: #2d2d2d;
+            padding: 20px;
+            border-radius: 10px;
+            border: 1px solid #444;
+            text-align: center;
+        }
+        
+        .stat-card .label {
+            color: #999;
+            font-size: 0.9em;
+            margin-bottom: 10px;
+        }
+        
+        .stat-card .value {
+            color: #4CAF50;
+            font-size: 1.5em;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>批量策略优化</h1>
+            <a href="/" class="btn">返回首页</a>
+        </div>
+        
+        <div class="info-box">
+            <strong>功能说明：</strong>
+            本功能将对所有ETF运行所有策略的所有参数组合，自动找出每个ETF的最佳策略和参数。
+            参数范围已优化，避免组合爆炸。预计耗时：每个ETF约1-5分钟。
+        </div>
+        
+        <div class="config-section">
+            <h2 style="color: #4CAF50; margin-bottom: 20px;">回测配置</h2>
+            <form id="optimizeForm">
+                {% csrf_token %}
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>开始日期</label>
+                        <input type="date" name="start_date" id="start_date" required>
+                    </div>
+                    <div class="form-group">
+                        <label>结束日期</label>
+                        <input type="date" name="end_date" id="end_date" required>
+                    </div>
+                    <div class="form-group">
+                        <label>初始资金</label>
+                        <input type="number" name="initial_cash" id="initial_cash" value="100000" min="1000" step="1000" required>
+                    </div>
+                    <div class="form-group">
+                        <label>手续费率 (%)</label>
+                        <input type="number" name="commission" id="commission" value="0.1" min="0" max="10" step="0.01" required>
+                    </div>
+                    <div class="form-group">
+                        <label>最大测试ETF数（可选，留空表示全部）</label>
+                        <input type="number" name="max_etfs" id="max_etfs" min="1" placeholder="留空表示全部 {{ total_etfs }} 个">
+                    </div>
+                </div>
+                <button type="button" class="btn" id="btnOptimize" onclick="runOptimize()" style="width: 100%; margin-top: 20px; padding: 15px; font-size: 1.1em;">
+                    开始批量优化
+                </button>
+            </form>
+        </div>
+        
+        <div class="loading" id="loading">
+            <div class="spinner"></div>
+            <p>正在运行批量优化，请稍候...</p>
+            <p id="progressText" style="margin-top: 10px; color: #999;"></p>
+        </div>
+        
+        <div class="error" id="error"></div>
+        
+        <div class="results-section" id="resultsSection">
+            <h2 style="color: #4CAF50; margin-bottom: 20px;">优化结果</h2>
+            
+            <div class="stats-grid" id="statsGrid">
+                <!-- 统计卡片将显示在这里 -->
+            </div>
+            
+            <div style="overflow-x: auto;">
+                <table class="summary-table" id="resultsTable">
+                    <thead>
+                        <tr>
+                            <th>ETF代码</th>
+                            <th>ETF名称</th>
+                            <th>最佳策略</th>
+                            <th>最佳参数</th>
+                            <th>总收益率</th>
+                            <th>年化收益率</th>
+                            <th>夏普比率</th>
+                            <th>最大回撤</th>
+                            <th>交易次数</th>
+                        </tr>
+                    </thead>
+                    <tbody id="resultsTableBody">
+                        <!-- 结果将显示在这里 -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // 设置默认日期为历史日期范围（2022-01-01 到 2023-12-31）
+        // 使用历史数据可以确保回测的准确性
+        document.getElementById('start_date').value = '2022-01-01';
+        document.getElementById('end_date').value = '2023-12-31';
+        
+        function runOptimize() {
+            const form = document.getElementById('optimizeForm');
+            const formData = new FormData(form);
+            const btn = document.getElementById('btnOptimize');
+            const loading = document.getElementById('loading');
+            const error = document.getElementById('error');
+            const resultsSection = document.getElementById('resultsSection');
+            
+            // 禁用按钮，显示加载
+            btn.disabled = true;
+            loading.classList.add('active');
+            error.classList.remove('active');
+            resultsSection.classList.remove('active');
+            
+            // 获取CSRF token
+            const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]').value;
+            
+            // 发送请求
+            fetch('/api/batch-optimize/', {
+                method: 'POST',
+                headers: {
+                    'X-CSRFToken': csrfToken
+                },
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                loading.classList.remove('active');
+                btn.disabled = false;
+                
+                if (data.error) {
+                    error.textContent = '错误: ' + data.error;
+                    error.classList.add('active');
+                    return;
+                }
+                
+                // 显示结果
+                displayResults(data);
+            })
+            .catch(error => {
+                loading.classList.remove('active');
+                btn.disabled = false;
+                document.getElementById('error').textContent = '请求失败: ' + error.message;
+                document.getElementById('error').classList.add('active');
+            });
+        }
+        
+        function displayResults(data) {
+            const resultsSection = document.getElementById('resultsSection');
+            const statsGrid = document.getElementById('statsGrid');
+            const tableBody = document.getElementById('resultsTableBody');
+            
+            resultsSection.classList.add('active');
+            
+            // 显示统计信息
+            const summary = data.summary || [];
+            statsGrid.innerHTML = `
+                <div class="stat-card">
+                    <div class="label">测试ETF数</div>
+                    <div class="value">${data.total_etfs || 0}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">测试策略数</div>
+                    <div class="value">${data.total_strategies_tested || 0}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">有效结果数</div>
+                    <div class="value">${summary.length}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">平均收益率</div>
+                    <div class="value">${summary.length > 0 ? (summary.reduce((sum, r) => sum + (r.total_return || 0), 0) / summary.length).toFixed(2) : 0}%</div>
+                </div>
+            `;
+            
+            // 显示表格
+            tableBody.innerHTML = '';
+            summary.forEach(row => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${row.symbol}</td>
+                    <td>${row.name}</td>
+                    <td><span class="strategy-badge">${row.best_strategy || 'N/A'}</span></td>
+                    <td><code style="font-size: 0.85em;">${JSON.stringify(row.best_params || {})}</code></td>
+                    <td class="${(row.total_return || 0) >= 0 ? 'positive' : 'negative'}">
+                        ${(row.total_return || 0) >= 0 ? '+' : ''}${(row.total_return || 0).toFixed(2)}%
+                    </td>
+                    <td class="${(row.annual_return || 0) >= 0 ? 'positive' : 'negative'}">
+                        ${(row.annual_return || 0) >= 0 ? '+' : ''}${(row.annual_return || 0).toFixed(2)}%
+                    </td>
+                    <td>${(row.sharpe_ratio || 0).toFixed(3)}</td>
+                    <td class="negative">${(row.max_drawdown || 0).toFixed(2)}%</td>
+                    <td>${row.total_trades || 0}</td>
+                `;
+                tableBody.appendChild(tr);
+            });
+        }
+    </script>
+</body>
+</html>
+

@@ -150,6 +150,17 @@
                                 </span>
                             </td>
                             <td>
+                                {% if etf.instrument.trading_rule == 'T+0' %}
+                                    <span style="background-color: #9c27b0; color: white; padding: 3px 8px; border-radius: 3px; font-size: 0.9em; font-weight: bold;">
+                                        T+0
+                                    </span>
+                                {% else %}
+                                    <span style="background-color: #607d8b; color: white; padding: 3px 8px; border-radius: 3px; font-size: 0.9em;">
+                                        T+1
+                                    </span>
+                                {% endif %}
+                            </td>
+                            <td>
                                 {% if etf.latest %}
                                     {{ etf.latest.close|floatformat:4 }}
                                 {% else %}
@@ -196,6 +207,7 @@
                     <th>代码</th>
                     <th>名称</th>
                     <th>行业分类</th>
+                    <th>交易规则</th>
                     <th>最新收盘价</th>
                     <th>{{ period_label }}涨跌幅(%)</th>
                     <th>总涨跌幅(%)</th>
@@ -216,6 +228,17 @@
                         <span style="background-color: #e3f2fd; padding: 3px 8px; border-radius: 3px; font-size: 0.9em;">
                             {{ etf.instrument.category|default:"未分类" }}
                         </span>
+                    </td>
+                    <td>
+                        {% if etf.instrument.trading_rule == 'T+0' %}
+                            <span style="background-color: #9c27b0; color: white; padding: 3px 8px; border-radius: 3px; font-size: 0.9em; font-weight: bold;">
+                                T+0
+                            </span>
+                        {% else %}
+                            <span style="background-color: #607d8b; color: white; padding: 3px 8px; border-radius: 3px; font-size: 0.9em;">
+                                T+1
+                            </span>
+                        {% endif %}
                     </td>
                     <td>
                         {% if etf.latest %}

@@ -31,27 +31,4 @@ class DjangoPandasData(bt.feeds.PandasData):
         ('amount', 'amount'),  # 成交额
         ('openinterest', None),  # 持仓量（期货用，这里不用）
     )
-    
-    def __init__(self, dataframe: pd.DataFrame):
-        """
-        初始化数据源
-        
-        Args:
-            dataframe: 包含OHLCV数据的DataFrame
-        """
-        # 确保date列是datetime类型
-        if 'date' in dataframe.columns:
-            dataframe = dataframe.set_index('date')
-        elif not isinstance(dataframe.index, pd.DatetimeIndex):
-            raise ValueError("DataFrame must have 'date' column or DatetimeIndex")
-        
-        # 确保索引是DatetimeIndex
-        if not isinstance(dataframe.index, pd.DatetimeIndex):
-            dataframe.index = pd.to_datetime(dataframe.index)
-        
-        # 排序
-        dataframe = dataframe.sort_index()
-        
-        # 调用父类初始化
-        super(DjangoPandasData, self).__init__(dataname=dataframe)
 

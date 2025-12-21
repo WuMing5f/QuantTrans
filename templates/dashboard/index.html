@@ -182,6 +182,7 @@
             <div class="nav-buttons">
                 <a href="{% url 'etf_overview' %}" class="nav-btn">A股ETF概览</a>
                 <a href="{% url 'us_stocks_overview' %}" class="nav-btn">美股龙头概览</a>
+                <a href="{% url 'backtest' %}" class="nav-btn">策略回测</a>
             </div>
         </div>
 
@@ -262,6 +263,9 @@
                             {% for etf in sector.etfs %}
                             <a href="{% url 'chart' etf.symbol %}" class="etf-link" title="{{ etf.name }}">
                                 {{ etf.symbol }}
+                                {% if etf.trading_rule == 'T+0' %}
+                                    <span style="background-color: #9c27b0; color: white; padding: 1px 4px; border-radius: 2px; font-size: 0.75em; margin-left: 2px;">T+0</span>
+                                {% endif %}
                                 <span style="font-size: 0.85em; color: {% if etf.change_pct >= 0 %}#26a69a{% else %}#ef5350{% endif %};">
                                     ({% if etf.change_pct >= 0 %}+{% endif %}{{ etf.change_pct|floatformat:1 }}%)
                                 </span>

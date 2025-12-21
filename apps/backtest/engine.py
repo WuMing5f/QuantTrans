@@ -7,7 +7,7 @@ from typing import Dict, Any, Union
 import pandas as pd
 from apps.data_master.models import Instrument, Candle
 from apps.backtest.feeds import DjangoPandasData
-from apps.backtest.strategies import MACrossStrategy, MACDStrategy
+from apps.backtest.strategies import STRATEGY_REGISTRY
 
 
 def run_backtest(
@@ -15,6 +15,8 @@ def run_backtest(
     strategy_name: str,
     start_date: Union[str, date],
     end_date: Union[str, date],
+    data_type: str = 'daily',  # 'daily' 或 'minute'
+    interval: str = '1m',  # 分钟数据的间隔: '1m', '5m', '15m', '30m', '60m'
     initial_cash: float = 100000.0,
     commission: float = 0.001,  # 0.1% 手续费
     **strategy_params
@@ -34,11 +36,16 @@ def run_backtest(
     Returns:
         包含回测结果的字典
     """
-    # 转换日期格式
-    if isinstance(start_date, str):
-        start_date = datetime.strptime(start_date, '%Y-%m-%d').date()
-    if isinstance(end_date, str):
-        end_date = datetime.strptime(end_date, '%Y-%m-%d').date()
+    # 保存原始日期字符串用于结果返回
+    original_start_date = start_date
+    original_end_date = end_date
+    
+    # 转换日期格式（仅对日K数据需要date类型）
+    if data_type == 'daily':
+        if isinstance(start_date, str):
+            start_date = datetime.strptime(start_date, '%Y-%m-%d').date()
+        if isinstance(end_date, str):
+            end_date = datetime.strptime(end_date, '%Y-%m-%d').date()
     
     # 获取标的
     try:
@@ -47,30 +54,94 @@ def run_backtest(
         raise ValueError(f"Instrument {symbol} not found. Please sync data first.")
     
     # 从数据库查询K线数据
-    candles = Candle.objects.filter(
-        instrument=instrument,
-        date__gte=start_date,
-        date__lte=end_date
-    ).order_by('date')
-    
-    if not candles.exists():
-        raise ValueError(f"No candle data found for {symbol} in range {start_date} to {end_date}")
-    
-    # 转换为DataFrame
-    data_list = []
-    for candle in candles:
-        data_list.append({
-            'date': candle.date,
-            'open': float(candle.open),
-            'high': float(candle.high),
-            'low': float(candle.low),
-            'close': float(candle.close),
-            'volume': int(candle.volume),
-            'amount': float(candle.amount),
-        })
+    if data_type == 'daily':
+        # 日K数据
+        from apps.data_master.models import Candle
+        candles = Candle.objects.filter(
+            instrument=instrument,
+            date__gte=start_date,
+            date__lte=end_date
+        ).order_by('date')
+        
+        if not candles.exists():
+            raise ValueError(f"No daily candle data found for {symbol} in range {start_date} to {end_date}")
+        
+        # 转换为DataFrame
+        data_list = []
+        for candle in candles:
+            data_list.append({
+                'date': candle.date,
+                'open': float(candle.open),
+                'high': float(candle.high),
+                'low': float(candle.low),
+                'close': float(candle.close),
+                'volume': int(candle.volume),
+                'amount': float(candle.amount),
+            })
+    else:
+        # 分钟K数据
+        from apps.data_master.models import CandleMinute
+        from datetime import datetime as dt
+        import pytz
+        
+        # 转换日期为datetime
+        if isinstance(start_date, date):
+            start_datetime = dt.combine(start_date, dt.min.time())
+        else:
+            start_datetime = dt.strptime(start_date, '%Y-%m-%d') if isinstance(start_date, str) else start_date
+        
+        if isinstance(end_date, date):
+            end_datetime = dt.combine(end_date, dt.max.time())
+        else:
+            end_datetime = dt.strptime(end_date, '%Y-%m-%d') if isinstance(end_date, str) else end_date
+        
+        # 转换为UTC时间（Django存储的是UTC）
+        beijing_tz = pytz.timezone('Asia/Shanghai')
+        if start_datetime.tzinfo is None:
+            start_datetime = beijing_tz.localize(start_datetime).astimezone(pytz.utc)
+        if end_datetime.tzinfo is None:
+            end_datetime = beijing_tz.localize(end_datetime).astimezone(pytz.utc)
+        
+        minute_candles = CandleMinute.objects.filter(
+            instrument=instrument,
+            interval=interval,
+            datetime__gte=start_datetime,
+            datetime__lte=end_datetime
+        ).order_by('datetime')
+        
+        if not minute_candles.exists():
+            raise ValueError(f"No {interval} minute candle data found for {symbol} in range {original_start_date} to {original_end_date}")
+        
+        # 转换为DataFrame
+        data_list = []
+        for candle in minute_candles:
+            # 转换为本地时间用于显示
+            dt_local = candle.datetime.astimezone(beijing_tz) if candle.datetime.tzinfo else candle.datetime
+            data_list.append({
+                'date': dt_local,
+                'open': float(candle.open),
+                'high': float(candle.high),
+                'low': float(candle.low),
+                'close': float(candle.close),
+                'volume': int(candle.volume),
+                'amount': float(candle.amount),
+            })
     
     df = pd.DataFrame(data_list)
-    df['date'] = pd.to_datetime(df['date'])
+    
+    # 准备DataFrame：确保索引是DatetimeIndex
+    if 'date' in df.columns:
+        df['date'] = pd.to_datetime(df['date'])
+        df = df.set_index('date')
+    elif not isinstance(df.index, pd.DatetimeIndex):
+        raise ValueError("DataFrame must have 'date' column or DatetimeIndex")
+    
+    # 确保索引是DatetimeIndex
+    if not isinstance(df.index, pd.DatetimeIndex):
+        df.index = pd.to_datetime(df.index)
+    
+    # 排序
+    df = df.sort_index()
     
     # 初始化Cerebro回测引擎
     cerebro = bt.Cerebro()
@@ -81,19 +152,18 @@ def run_backtest(
     # 设置手续费
     cerebro.broker.setcommission(commission=commission)
     
-    # 添加数据源
-    data_feed = DjangoPandasData(df)
+    # 设置每次交易的仓位大小（使用百分比sizer，确保按比例买入）
+    # 这样可以确保不同初始资金时，交易规模成比例
+    cerebro.addsizer(bt.sizers.PercentSizer, percents=95)  # 每次使用95%的资金
+    
+    # 添加数据源 - 直接传递DataFrame给PandasData
+    data_feed = DjangoPandasData(dataname=df)
     cerebro.adddata(data_feed)
     
     # 选择策略
-    strategies = {
-        'macross': MACrossStrategy,
-        'macd': MACDStrategy,
-    }
-    
-    strategy_class = strategies.get(strategy_name.lower())
+    strategy_class = STRATEGY_REGISTRY.get(strategy_name.lower())
     if not strategy_class:
-        raise ValueError(f"Unknown strategy: {strategy_name}. Available: {list(strategies.keys())}")
+        raise ValueError(f"Unknown strategy: {strategy_name}. Available: {list(STRATEGY_REGISTRY.keys())}")
     
     # 添加策略
     cerebro.addstrategy(strategy_class, **strategy_params)
@@ -102,9 +172,11 @@ def run_backtest(
     cerebro.addanalyzer(bt.analyzers.SharpeRatio, _name='sharpe')
     cerebro.addanalyzer(bt.analyzers.Returns, _name='returns')
     cerebro.addanalyzer(bt.analyzers.DrawDown, _name='drawdown')
+    cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trades')  # 交易统计
     
     # 运行回测
     print(f'开始回测: {symbol}, 策略: {strategy_name}, 初始资金: {initial_cash}')
+    print(f'数据条数: {len(df)}, 日期范围: {df.index[0]} 到 {df.index[-1]}')
     results = cerebro.run()
     
     # 获取结果
@@ -115,15 +187,104 @@ def run_backtest(
     sharpe = strat.analyzers.sharpe.get_analysis()
     returns = strat.analyzers.returns.get_analysis()
     drawdown = strat.analyzers.drawdown.get_analysis()
+    trades_analysis = strat.analyzers.trades.get_analysis()
+    
+    # 统计交易信息（正确的方式）
+    total_trades = trades_analysis.get('total', {}).get('total', 0) if trades_analysis else 0
+    won_trades = trades_analysis.get('won', {}).get('total', 0) if trades_analysis else 0
+    lost_trades = trades_analysis.get('lost', {}).get('total', 0) if trades_analysis else 0
+    print(f'最终资产: {final_value:.2f}, 交易次数: {total_trades}')
+    print(f'交易统计: 总交易={total_trades}, 盈利={won_trades}, 亏损={lost_trades}')
+    
+    # 如果没有任何交易，打印调试信息
+    if total_trades == 0:
+        print(f'警告: 策略 {strategy_name} 没有产生任何交易！')
+        print(f'  - 初始资金: {initial_cash}')
+        print(f'  - 最终资金: {final_value}')
+        print(f'  - 数据点数: {len(df)}')
+        if len(df) > 0:
+            print(f'  - 第一个收盘价: {df.iloc[0]["close"]:.2f}')
+            print(f'  - 最后一个收盘价: {df.iloc[-1]["close"]:.2f}')
+            # 计算最小购买金额
+            min_price = df['close'].min()
+            max_price = df['close'].max()
+            print(f'  - 价格范围: {min_price:.2f} ~ {max_price:.2f}')
+            print(f'  - 可购买股数（最低价）: {int(initial_cash * 0.95 / min_price)}')
+            
+            # 检查日期范围是否合理（不应该选择未来日期）
+            today = datetime.now().date()
+            first_date = df.index[0].date() if hasattr(df.index[0], 'date') else df.index[0]
+            last_date = df.index[-1].date() if hasattr(df.index[-1], 'date') else df.index[-1]
+            if last_date > today:
+                print(f'  ⚠️ 警告: 数据包含未来日期！最后日期: {last_date}, 今天: {today}')
+                print(f'  ⚠️ 建议: 请使用历史日期范围进行回测，例如: 2022-01-01 到 2024-12-20')
     
     # 计算收益率
     total_return = (final_value - initial_cash) / initial_cash * 100
     
+    # 获取收益曲线数据和交易时点
+    equity_curve = []
+    trade_points = []
+    try:
+        # 使用 object.__getattribute__ 来获取 equity_curve 属性，避免 Backtrader 的 __getattr__ 拦截
+        equity_curve = object.__getattribute__(strat, 'equity_curve')
+        if equity_curve:
+            print(f"Found equity curve with {len(equity_curve)} data points")
+        
+        try:
+            trade_points = object.__getattribute__(strat, 'trade_points')
+            if trade_points:
+                print(f"Found {len(trade_points)} trade points")
+        except AttributeError:
+            print("No trade_points found in strategy")
+            trade_points = []
+        
+        if not equity_curve:
+            # 如果没有记录，从数据重建（使用最终价值作为估算）
+            print("Warning: equity_curve is empty, creating simplified version")
+            # 简化版本：使用线性插值估算（df的索引已经是date）
+            total_days = len(df)
+            for i, (idx, row) in enumerate(df.iterrows()):
+                # 计算进度百分比
+                progress = (i + 1) / total_days if total_days > 0 else 0
+                # 线性插值从初始资金到最终价值
+                estimated_value = initial_cash + (final_value - initial_cash) * progress
+                date_str = idx.strftime('%Y-%m-%d') if hasattr(idx, 'strftime') else str(idx)
+                equity_curve.append({
+                    'date': date_str,
+                    'value': estimated_value,
+                    'return_pct': ((estimated_value - initial_cash) / initial_cash) * 100 if initial_cash > 0 else 0
+                })
+            print(f"Created simplified equity curve with {len(equity_curve)} data points")
+    except AttributeError:
+        # 如果没有记录，从数据重建（使用最终价值作为估算）
+        print("Warning: No equity_curve found in strategy, creating simplified version")
+        # 简化版本：使用线性插值估算（df的索引已经是date）
+        total_days = len(df)
+        for i, (idx, row) in enumerate(df.iterrows()):
+            # 计算进度百分比
+            progress = (i + 1) / total_days if total_days > 0 else 0
+            # 线性插值从初始资金到最终价值
+            estimated_value = initial_cash + (final_value - initial_cash) * progress
+            date_str = idx.strftime('%Y-%m-%d') if hasattr(idx, 'strftime') else str(idx)
+            equity_curve.append({
+                'date': date_str,
+                'value': estimated_value,
+                'return_pct': ((estimated_value - initial_cash) / initial_cash) * 100 if initial_cash > 0 else 0
+            })
+        print(f"Created simplified equity curve with {len(equity_curve)} data points")
+    
+    # 格式化日期用于显示（使用原始输入）
+    start_date_str = str(original_start_date)
+    end_date_str = str(original_end_date)
+    
     result = {
         'symbol': symbol,
         'strategy': strategy_name,
-        'start_date': start_date.isoformat(),
-        'end_date': end_date.isoformat(),
+        'data_type': data_type,
+        'interval': interval if data_type == 'minute' else None,
+        'start_date': start_date_str,
+        'end_date': end_date_str,
         'initial_cash': initial_cash,
         'final_value': final_value,
         'total_return': total_return,
@@ -132,6 +293,12 @@ def run_backtest(
         'annual_return_pct': returns.get('rnorm', 0) * 100 if returns.get('rnorm') else 0,
         'max_drawdown': drawdown.get('max', {}).get('drawdown', 0) if drawdown.get('max') else 0,
         'max_drawdown_period': drawdown.get('max', {}).get('len', 0) if drawdown.get('max') else 0,
+        'data_points': len(df),
+        'equity_curve': equity_curve,  # 收益曲线数据
+        'trade_points': trade_points,  # 交易时点数据（买入/卖出标记）
+        'total_trades': total_trades,  # 总交易次数
+        'won_trades': won_trades,  # 盈利交易次数
+        'lost_trades': lost_trades,  # 亏损交易次数
     }
     
     return result

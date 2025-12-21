@@ -5,7 +5,8 @@ from apps.analysis.indicators import IndicatorEngine
 from django.db.models import Max, Min, Avg, Count
 import pandas as pd
 import json
-
+from datetime import datetime, timedelta
+import pytz
 
 def index(request):
     """首页 - 板块轮动图表"""
@@ -68,6 +69,7 @@ def index(request):
                 'symbol': etf.symbol,
                 'name': etf.name,
                 'change_pct': change_pct,
+                'trading_rule': etf.trading_rule,
             })
             sector_stats[category]['change_pcts'].append(change_pct)
     
@@ -283,6 +285,9 @@ def get_chart_data(request, symbol):
         # 获取时间粒度参数（日K或分钟K）
         interval = request.GET.get('interval', 'daily')  # 'daily', '1m', '5m', '15m', '30m', '60m'
         
+        # 定义北京时区
+        beijing_tz = pytz.timezone('Asia/Shanghai')
+
         # 根据时间粒度选择数据源
         if interval == 'daily':
             # 日K数据
@@ -308,11 +313,6 @@ def get_chart_data(request, symbol):
         else:
             # 分钟K数据
             # 对于分钟数据，限制显示最近的数据量，避免图表过于密集
-            # 1分钟数据：最近3天（约720条）
-            # 5分钟数据：最近5天（约480条）
-            # 15分钟数据：最近10天（约400条）
-            # 30分钟数据：最近20天（约400条）
-            # 60分钟数据：最近30天（约600条）
             limit_map = {
                 '1m': 720,   # 约3个交易日
                 '5m': 480,   # 约5个交易日
@@ -334,10 +334,6 @@ def get_chart_data(request, symbol):
             minute_candles = list(reversed(minute_candles))
             
             # 转换为DataFrame
-            # 注意：Django存储的datetime是UTC时间，需要转换为北京时间（UTC+8）
-            import pytz
-            beijing_tz = pytz.timezone('Asia/Shanghai')
-            
             data_list = []
             for candle in minute_candles:
                 # 如果是aware datetime（带时区），转换为北京时间
@@ -349,15 +345,9 @@ def get_chart_data(request, symbol):
                     # naive datetime，假设已经是北京时间
                     dt_beijing = beijing_tz.localize(dt)
                 
-                # 处理异常数据：如果开盘价为0，使用前一条的收盘价或当前收盘价
-                open_price = float(candle.open)
-                if open_price == 0 or open_price < 0.1:
-                    # 如果开盘价异常，使用收盘价替代（可能是数据源的问题）
-                    open_price = float(candle.close)
-                
                 data_list.append({
                     'date': dt_beijing.isoformat(),
-                    'open': open_price,
+                    'open': float(candle.open),
                     'high': float(candle.high),
                     'low': float(candle.low),
                     'close': float(candle.close),
@@ -368,6 +358,10 @@ def get_chart_data(request, symbol):
             df = pd.DataFrame(data_list)
             df['date'] = pd.to_datetime(df['date'])
         
+        # 修复开盘价为0的问题
+        if 'open' in df.columns:
+            df['open'] = df.apply(lambda row: row['close'] if row['open'] == 0 else row['open'], axis=1)
+        
         # 计算技术指标
         df_with_indicators = IndicatorEngine.inject_indicators(df, market=instrument.market)
         
@@ -377,15 +371,11 @@ def get_chart_data(request, symbol):
             dates = [d.strftime('%Y-%m-%d') for d in df_with_indicators['date']]
         else:
             # 分钟数据格式化：根据数据密度选择格式
-            # 如果数据量很大（>500），使用更简洁的格式
             if len(df_with_indicators) > 500:
-                # 对于密集数据，使用简洁格式：月-日 时:分
                 dates = [d.strftime('%m-%d %H:%M') for d in df_with_indicators['date']]
             elif len(df_with_indicators) > 200:
-                # 中等数据量，显示完整日期但简化格式
                 dates = [d.strftime('%m-%d %H:%M') for d in df_with_indicators['date']]
             else:
-                # 少量数据，显示完整日期时间
                 dates = [d.strftime('%Y-%m-%d %H:%M') for d in df_with_indicators['date']]
         
         # K线数据：[开盘, 收盘, 最低, 最高]
@@ -395,6 +385,17 @@ def get_chart_data(request, symbol):
         # 成交量
         volume_data = [int(row['volume']) for _, row in df_with_indicators.iterrows()]
         
+        # 成交量（涨/跌）
+        volume_up_data = []
+        volume_down_data = []
+        for i, row in df_with_indicators.iterrows():
+            if row['close'] >= row['open']:
+                volume_up_data.append(int(row['volume']))
+                volume_down_data.append(None)
+            else:
+                volume_up_data.append(None)
+                volume_down_data.append(int(row['volume']))
+
         # 移动平均线（处理数据不足的情况）
         ma5_data = []
         ma20_data = []
@@ -431,6 +432,8 @@ def get_chart_data(request, symbol):
             'dates': dates,
             'kline': kline_data,
             'volume': volume_data,
+            'volume_up': volume_up_data,
+            'volume_down': volume_down_data,
             'ma5': ma5_data,
             'ma20': ma20_data,
             'ma60': ma60_data,
@@ -444,6 +447,7 @@ def get_chart_data(request, symbol):
             'symbol': symbol,
             'name': instrument.name,
             'market': instrument.market,
+            'trading_rule': instrument.trading_rule,
         }
         
         return JsonResponse(response_data)
@@ -452,3 +456,218 @@ def get_chart_data(request, symbol):
         return JsonResponse({'error': '标的不存在'}, status=404)
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=500)
+
+
+def backtest_view(request):
+    """回测页面"""
+    from apps.backtest.strategies import STRATEGY_REGISTRY
+    
+    # 获取所有有数据的标的
+    instruments = Instrument.objects.filter(
+        candles__isnull=False
+    ).distinct().order_by('symbol')
+    
+    # 策略列表（包含说明和参数）
+    strategies = {
+        'macross': {
+            'name': '双均线策略',
+            'description': '当短期均线上穿长期均线时买入，下穿时卖出',
+            'params': {'fast_period': 5, 'slow_period': 20}
+        },
+        'macd': {
+            'name': 'MACD策略',
+            'description': '当MACD线上穿信号线时买入，下穿时卖出',
+            'params': {'fast_period': 12, 'slow_period': 26, 'signal_period': 9}
+        },
+        'rsi': {
+            'name': 'RSI策略',
+            'description': 'RSI低于超卖线时买入，高于超买线时卖出',
+            'params': {'period': 14, 'oversold': 30, 'overbought': 70}
+        },
+        'bollinger': {
+            'name': '布林带策略',
+            'description': '价格触及下轨时买入，触及上轨时卖出',
+            'params': {'period': 20, 'devfactor': 2.0}
+        },
+        'triple_ma': {
+            'name': '三均线策略',
+            'description': '短期均线 > 中期均线 > 长期均线时买入，反之卖出',
+            'params': {'fast_period': 5, 'mid_period': 10, 'slow_period': 20}
+        },
+        'mean_reversion': {
+            'name': '均值回归策略',
+            'description': '当价格偏离均线一定比例时买入/卖出',
+            'params': {'period': 20, 'threshold': 0.02}
+        },
+        'vcp': {
+            'name': 'VCP波动收缩策略',
+            'description': '识别波动收缩形态，在突破时买入（右侧交易）',
+            'params': {'lookback': 20, 'contraction_ratio': 0.7, 'volume_ratio': 0.8, 'breakout_threshold': 1.02}
+        },
+        'candlestick': {
+            'name': '蜡烛图形态策略',
+            'description': '识别锤子线、吞没形态、十字星等蜡烛图形态进行交易',
+            'params': {'pattern_type': 'all', 'confirmation_period': 2, 'min_body_ratio': 0.3, 'min_shadow_ratio': 2.0}
+        },
+        'swing': {
+            'name': '波段交易策略',
+            'description': '在上升趋势中，等待价格回调至支撑位买入，在阻力位卖出',
+            'params': {'trend_period': 20, 'swing_period': 10, 'pullback_ratio': 0.05, 'profit_target': 0.10, 'stop_loss': 0.05}
+        },
+        'trend_following': {
+            'name': '趋势跟踪策略',
+            'description': '等待趋势确认后入场，跟随趋势进行交易（右侧交易）',
+            'params': {'fast_period': 10, 'slow_period': 30, 'adx_period': 14, 'adx_threshold': 25, 'trailing_stop': 0.03}
+        },
+    }
+    
+    import json
+    context = {
+        'instruments': instruments,
+        'strategies': strategies,  # 字典格式用于模板
+        'strategies_json': json.dumps(strategies),  # JSON字符串用于JavaScript
+    }
+    return render(request, 'dashboard/backtest.html', context)
+
+
+def run_backtest_api(request):
+    """运行回测的API接口"""
+    from apps.backtest.engine import run_backtest
+    from django.views.decorators.csrf import csrf_exempt
+    import json
+    
+    if request.method != 'POST':
+        return JsonResponse({'error': '只支持POST请求'}, status=405)
+    
+    try:
+        # 支持JSON和表单数据
+        if request.content_type == 'application/json':
+            data = json.loads(request.body)
+        else:
+            data = request.POST
+        
+        symbol = data.get('symbol')
+        strategy_name = data.get('strategy')
+        start_date = data.get('start_date')
+        end_date = data.get('end_date')
+        data_type = data.get('data_type', 'daily')  # 'daily' 或 'minute'
+        interval = data.get('interval', '1m')  # 分钟数据的时间间隔
+        initial_cash = float(data.get('initial_cash', 100000))
+        commission = float(data.get('commission', 0.001))
+        
+        # 获取策略参数
+        strategy_params = {}
+        for key, value in request.POST.items():
+            if key.startswith('param_'):
+                param_name = key.replace('param_', '')
+                try:
+                    # 尝试转换为数值
+                    strategy_params[param_name] = float(value) if '.' in value else int(value)
+                except ValueError:
+                    strategy_params[param_name] = value
+        
+        # 运行回测
+        result = run_backtest(
+            symbol=symbol,
+            strategy_name=strategy_name,
+            start_date=start_date,
+            end_date=end_date,
+            data_type=data_type,
+            interval=interval if data_type == 'minute' else '1m',
+            initial_cash=initial_cash,
+            commission=commission,
+            **strategy_params
+        )
+        
+        return JsonResponse(result)
+        
+    except Exception as e:
+        import traceback
+        error_detail = traceback.format_exc()
+        print(f"Backtest API error: {str(e)}")
+        print(f"Traceback:\n{error_detail}")
+        return JsonResponse({'error': str(e), 'detail': error_detail}, status=500)
+
+
+def batch_optimize_view(request):
+    """批量优化页面"""
+    from apps.data_master.models import Instrument
+    
+    # 获取所有有数据的ETF
+    etfs = Instrument.objects.filter(
+        market='CN',
+        candles__isnull=False
+    ).distinct().order_by('symbol')
+    
+    context = {
+        'total_etfs': etfs.count(),
+        'etfs': etfs,
+    }
+    return render(request, 'dashboard/batch_optimize.html', context)
+
+
+def batch_optimize_api(request):
+    """批量优化API接口"""
+    from apps.backtest.optimizer import batch_optimize_all_etfs
+    from django.views.decorators.csrf import csrf_exempt
+    import json
+    
+    if request.method != 'POST':
+        return JsonResponse({'error': '只支持POST请求'}, status=405)
+    
+    try:
+        # 支持JSON和表单数据
+        if request.content_type == 'application/json':
+            data = json.loads(request.body)
+        else:
+            data = request.POST
+        
+        start_date = data.get('start_date')
+        end_date = data.get('end_date')
+        initial_cash = float(data.get('initial_cash', 100000))
+        commission = float(data.get('commission', 0.001))
+        data_type = data.get('data_type', 'daily')
+        max_etfs = data.get('max_etfs')  # 可选，用于测试
+        
+        if max_etfs:
+            max_etfs = int(max_etfs)
+        
+        if not start_date or not end_date:
+            return JsonResponse({'error': '请提供开始日期和结束日期'}, status=400)
+        
+        print(f'开始批量优化: {start_date} 到 {end_date}')
+        
+        # 运行批量优化
+        results = batch_optimize_all_etfs(
+            start_date=start_date,
+            end_date=end_date,
+            initial_cash=initial_cash,
+            commission=commission,
+            data_type=data_type,
+            max_etfs=max_etfs,
+        )
+        
+        # 转换DataFrame为字典（用于JSON序列化）
+        if results.get('summary_df') is not None:
+            results['summary_df'] = results['summary_df'].to_dict('records')
+        
+        # 简化详细结果（只保留最佳策略，避免数据过大）
+        simplified_results = {}
+        for symbol, data in results.get('detailed_results', {}).items():
+            simplified_results[symbol] = {
+                'etf_name': data['etf_name'],
+                'best_by_return': data.get('best_by_return'),
+                'best_by_sharpe': data.get('best_by_sharpe'),
+                'best_by_annual': data.get('best_by_annual'),
+            }
+        
+        results['detailed_results'] = simplified_results
+        
+        return JsonResponse(results)
+        
+    except Exception as e:
+        import traceback
+        error_detail = traceback.format_exc()
+        print(f"Batch optimize API error: {str(e)}")
+        print(f"Traceback:\n{error_detail}")
+        return JsonResponse({'error': str(e), 'detail': error_detail}, status=500)

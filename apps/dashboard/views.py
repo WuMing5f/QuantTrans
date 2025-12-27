@@ -1,12 +1,223 @@
 from django.shortcuts import render, get_object_or_404
 from django.http import JsonResponse
-from apps.data_master.models import Instrument, Candle, CandleMinute
+from apps.data_master.models import Instrument, Candle, CandleMinute, MarketData, TradeRecord
 from apps.analysis.indicators import IndicatorEngine
-from django.db.models import Max, Min, Avg, Count
+from apps.trading.execution_gateway import ExecutionGateway
+from django.db.models import Max, Min, Avg, Count, Sum, Q
+from django.utils import timezone
+from decimal import Decimal
 import pandas as pd
 import json
 from datetime import datetime, timedelta
 import pytz
+
+def dashboard_home(request):
+    """
+    总览仪表盘 - "一眼看清生死"的页面
+    包含：总资产、今日盈亏、持仓风险、API连接状态、紧急按钮
+    """
+    from apps.trading.execution_gateway import ExecutionGateway
+    from django.core.cache import cache
+    
+    # 初始化交易网关（模拟模式）
+    gateway = ExecutionGateway(mode='simulation')
+    
+    # 1. 计算总资产（持仓市值 + 现金）
+    # 从交易记录计算持仓和现金
+    all_trades = TradeRecord.objects.filter(is_backtest=False).order_by('timestamp')
+    
+    positions_dict = {}  # {symbol: {'quantity': qty, 'cost': cost}}
+    cash = Decimal('100000')  # 初始资金
+    
+    for trade in all_trades:
+        if trade.direction == 'BUY':
+            cost = trade.price * trade.quantity + trade.fee
+            cash -= cost
+            if trade.symbol not in positions_dict:
+                positions_dict[trade.symbol] = {'quantity': Decimal('0'), 'cost': Decimal('0')}
+            positions_dict[trade.symbol]['quantity'] += trade.quantity
+            positions_dict[trade.symbol]['cost'] += cost
+        else:  # SELL
+            revenue = trade.price * trade.quantity - trade.fee
+            cash += revenue
+            if trade.symbol in positions_dict:
+                # 按成本比例减少持仓
+                cost_per_unit = positions_dict[trade.symbol]['cost'] / positions_dict[trade.symbol]['quantity']
+                positions_dict[trade.symbol]['quantity'] -= trade.quantity
+                positions_dict[trade.symbol]['cost'] -= cost_per_unit * trade.quantity
+                if positions_dict[trade.symbol]['quantity'] <= 0:
+                    del positions_dict[trade.symbol]
+    
+    # 计算持仓市值
+    position_value = Decimal('0')
+    positions = []
+    for symbol, pos_info in positions_dict.items():
+        # 获取最新价格
+        latest_data = MarketData.objects.filter(symbol=symbol).order_by('-datetime').first()
+        if latest_data:
+            current_price = latest_data.close_price
+            quantity = pos_info['quantity']
+            cost_price = pos_info['cost'] / quantity if quantity > 0 else Decimal('0')
+            market_value = current_price * quantity
+            position_value += market_value
+            pnl = market_value - pos_info['cost']
+            
+            positions.append({
+                'symbol': symbol,
+                'quantity': quantity,
+                'cost_price': cost_price,
+                'current_price': current_price,
+                'pnl': pnl,
+            })
+    
+    total_equity = cash + position_value
+    
+    # 2. 计算今日盈亏
+    today = timezone.now().date()
+    today_trades = TradeRecord.objects.filter(
+        timestamp__date=today,
+        is_backtest=False
+    )
+    
+    today_pnl = Decimal('0')
+    for trade in today_trades:
+        if trade.direction == 'BUY':
+            today_pnl -= (trade.price * trade.quantity + trade.fee)
+        else:
+            today_pnl += (trade.price * trade.quantity - trade.fee)
+    
+    # 3. 计算当前持仓风险（仓位比例）
+    if total_equity > 0:
+        position_risk = (position_value / total_equity) * 100
+    else:
+        position_risk = Decimal('0')
+    
+    # 4. API连接状态检查
+    api_status = {
+        'usmart': _check_usmart_connection(),
+        'akshare': _check_akshare_connection(),
+        'redis': _check_redis_connection(),
+    }
+    
+    # 5. 获取最近的交易记录
+    recent_trades = TradeRecord.objects.filter(
+        is_backtest=False
+    ).order_by('-timestamp')[:10]
+    
+    context = {
+        'total_equity': total_equity,
+        'today_pnl': today_pnl,
+        'position_risk': position_risk,
+        'api_status': api_status,
+        'recent_trades': recent_trades,
+        'positions': positions,
+    }
+    return render(request, 'dashboard/dashboard_home.html', context)
+
+
+def _check_usmart_connection():
+    """检查 uSmart API 连接状态"""
+    # TODO: 实际实现 uSmart SDK 连接检查
+    try:
+        # from usmart_sdk import USmartClient
+        # client = USmartClient()
+        # return client.ping()
+        return False  # 暂时返回 False，等待实际实现
+    except:
+        return False
+
+
+def _check_akshare_connection():
+    """检查 AkShare 连接状态"""
+    try:
+        import akshare as ak
+        # 简单测试：尝试获取一个ETF数据
+        # ak.fund_etf_hist_em(symbol="510300", period="日k", adjust="")
+        return True  # AkShare 通常是可用的
+    except:
+        return False
+
+
+def _check_redis_connection():
+    """检查 Redis 连接状态"""
+    try:
+        from django.core.cache import cache
+        cache.set('health_check', 'ok', 1)
+        return cache.get('health_check') == 'ok'
+    except:
+        return False
+
+
+def strategy_monitor(request, strategy_name=None):
+    """
+    策略详情与 K 线监控页面
+    左侧：K 线图（ECharts），显示买入/卖出点
+    右侧：实时日志
+    """
+    # 获取策略列表
+    strategies = TradeRecord.objects.filter(
+        is_backtest=False
+    ).values_list('strategy_name', flat=True).distinct()
+    
+    # 如果指定了策略，获取该策略的数据
+    selected_strategy = strategy_name or (strategies[0] if strategies else None)
+    
+    # 获取该策略的交易记录
+    trades = TradeRecord.objects.filter(
+        strategy_name=selected_strategy,
+        is_backtest=False
+    ).order_by('-timestamp')[:50] if selected_strategy else []
+    
+    # 获取策略交易的标的
+    symbols = TradeRecord.objects.filter(
+        strategy_name=selected_strategy,
+        is_backtest=False
+    ).values_list('symbol', flat=True).distinct() if selected_strategy else []
+    
+    # 获取第一个标的的K线数据（用于图表）
+    chart_data = None
+    if symbols:
+        symbol = symbols[0]
+        market_data = MarketData.objects.filter(
+            symbol=symbol
+        ).order_by('-datetime')[:100]
+        
+        if market_data:
+            chart_data = {
+                'symbol': symbol,
+                'dates': [md.datetime.strftime('%Y-%m-%d %H:%M:%S') for md in reversed(market_data)],
+                'kline': [[float(md.open_price), float(md.close_price), float(md.low_price), float(md.high_price)] 
+                          for md in reversed(market_data)],
+                'volume': [float(md.volume) for md in reversed(market_data)],
+                'taker_buy_volume': [float(md.taker_buy_volume) if md.taker_buy_volume else 0 
+                                    for md in reversed(market_data)],
+            }
+            
+            # 标记买入/卖出点
+            buy_points = []
+            sell_points = []
+            for trade in trades:
+                if trade.symbol == symbol:
+                    # 找到对应的K线时间点
+                    for i, md in enumerate(reversed(market_data)):
+                        if abs((md.datetime - trade.timestamp).total_seconds()) < 300:  # 5分钟内
+                            if trade.direction == 'BUY':
+                                buy_points.append({'index': i, 'price': float(trade.price)})
+                            else:
+                                sell_points.append({'index': i, 'price': float(trade.price)})
+                            break
+            
+            chart_data['buy_points'] = buy_points
+            chart_data['sell_points'] = sell_points
+    
+    context = {
+        'strategies': strategies,
+        'selected_strategy': selected_strategy,
+        'trades': trades,
+        'chart_data': chart_data,
+    }
+    return render(request, 'dashboard/strategy_monitor.html', context)
+
 
 def index(request):
     """首页 - 板块轮动图表"""
@@ -461,11 +672,27 @@ def get_chart_data(request, symbol):
 def backtest_view(request):
     """回测页面"""
     from apps.backtest.strategies import STRATEGY_REGISTRY
+    from django.db.models import Min, Max
     
-    # 获取所有有数据的标的
+    # 获取所有有数据的标的，并计算每个标的的数据范围
     instruments = Instrument.objects.filter(
         candles__isnull=False
     ).distinct().order_by('symbol')
+    
+    # 为每个标的添加数据范围信息
+    instruments_with_range = []
+    for inst in instruments:
+        candles = Candle.objects.filter(instrument=inst)
+        date_range = candles.aggregate(
+            min_date=Min('date'),
+            max_date=Max('date')
+        )
+        instruments_with_range.append({
+            'instrument': inst,
+            'min_date': date_range['min_date'],
+            'max_date': date_range['max_date'],
+            'count': candles.count()
+        })
     
     # 策略列表（包含说明和参数）
     strategies = {
@@ -523,7 +750,7 @@ def backtest_view(request):
     
     import json
     context = {
-        'instruments': instruments,
+        'instruments': instruments_with_range,
         'strategies': strategies,  # 字典格式用于模板
         'strategies_json': json.dumps(strategies),  # JSON字符串用于JavaScript
     }
@@ -604,6 +831,100 @@ def batch_optimize_view(request):
         'etfs': etfs,
     }
     return render(request, 'dashboard/batch_optimize.html', context)
+
+
+def optimize_strategy_api(request):
+    """单策略参数优化API接口"""
+    from apps.backtest.optimizer import optimize_single_strategy
+    from django.views.decorators.csrf import csrf_exempt
+    import json
+    
+    if request.method != 'POST':
+        return JsonResponse({'error': '只支持POST请求'}, status=405)
+    
+    try:
+        # 支持JSON和表单数据
+        if request.content_type == 'application/json':
+            data = json.loads(request.body)
+        else:
+            data = request.POST
+        
+        symbol = data.get('symbol')
+        strategy_name = data.get('strategy')
+        start_date = data.get('start_date')
+        end_date = data.get('end_date')
+        initial_cash = float(data.get('initial_cash', 100000))
+        commission = float(data.get('commission', 0.001))
+        data_type = data.get('data_type', 'daily')
+        
+        if not symbol or not strategy_name or not start_date or not end_date:
+            return JsonResponse({'error': '请提供标的、策略、开始日期和结束日期'}, status=400)
+        
+        print(f'=' * 60)
+        print(f'开始参数优化')
+        print(f'  标的: {symbol}')
+        print(f'  策略: {strategy_name}')
+        print(f'  日期范围: {start_date} 到 {end_date}')
+        print(f'  初始资金: {initial_cash}')
+        print(f'  手续费率: {commission}')
+        print(f'=' * 60)
+        
+        # 运行参数优化
+        result = optimize_single_strategy(
+            symbol=symbol,
+            strategy_name=strategy_name,
+            start_date=start_date,
+            end_date=end_date,
+            initial_cash=initial_cash,
+            commission=commission,
+            data_type=data_type,
+        )
+        
+        # 简化结果（只保留关键信息）
+        simplified_result = {
+            'symbol': result['symbol'],
+            'strategy_name': result['strategy_name'],
+            'total_combinations': result['total_combinations'],
+            'valid_results': result['valid_results'],
+            'best_by_return': {
+                'params': result['best_by_return'].get('strategy_params') if result['best_by_return'] else None,
+                'total_return': result['best_by_return'].get('total_return_pct') if result['best_by_return'] else None,
+                'annual_return': result['best_by_return'].get('annual_return_pct') if result['best_by_return'] else None,
+                'sharpe_ratio': result['best_by_return'].get('sharpe_ratio') if result['best_by_return'] else None,
+                'max_drawdown': result['best_by_return'].get('max_drawdown') if result['best_by_return'] else None,
+                'total_trades': result['best_by_return'].get('total_trades') if result['best_by_return'] else None,
+            } if result['best_by_return'] else None,
+            'best_by_sharpe': {
+                'params': result['best_by_sharpe'].get('strategy_params') if result['best_by_sharpe'] else None,
+                'total_return': result['best_by_sharpe'].get('total_return_pct') if result['best_by_sharpe'] else None,
+                'sharpe_ratio': result['best_by_sharpe'].get('sharpe_ratio') if result['best_by_sharpe'] else None,
+            } if result['best_by_sharpe'] else None,
+            'best_by_annual': {
+                'params': result['best_by_annual'].get('strategy_params') if result['best_by_annual'] else None,
+                'annual_return': result['best_by_annual'].get('annual_return_pct') if result['best_by_annual'] else None,
+            } if result['best_by_annual'] else None,
+            # 返回前10个最佳结果（按总收益率）
+            'top_results': sorted(
+                result['all_results'],
+                key=lambda x: x.get('total_return_pct', -999),
+                reverse=True
+            )[:10] if result['all_results'] else [],
+            # 如果最佳参数有结果，也返回其图表数据（用于显示最佳参数的收益曲线）
+            'best_chart_data': {
+                'equity_curve': result['best_by_return'].get('equity_curve', []) if result['best_by_return'] else [],
+                'trade_points': result['best_by_return'].get('trade_points', []) if result['best_by_return'] else [],
+                'initial_cash': initial_cash,
+            } if result['best_by_return'] and result['best_by_return'].get('equity_curve') else None,
+        }
+        
+        return JsonResponse(simplified_result)
+        
+    except Exception as e:
+        import traceback
+        error_detail = traceback.format_exc()
+        print(f"Strategy optimize API error: {str(e)}")
+        print(f"Traceback:\n{error_detail}")
+        return JsonResponse({'error': str(e), 'detail': error_detail}, status=500)
 
 
 def batch_optimize_api(request):

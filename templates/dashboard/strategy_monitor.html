@@ -1,0 +1,232 @@
+{% extends "dashboard/base.html" %}
+{% load static %}
+
+{% block title %}策略监控 - 量化交易系统{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row mb-3">
+        <div class="col-12">
+            <h2>策略监控</h2>
+            <div class="btn-group" role="group">
+                {% for strategy in strategies %}
+                    <a href="{% url 'strategy_monitor_detail' strategy_name=strategy %}" 
+                       class="btn {% if strategy == selected_strategy %}btn-primary{% else %}btn-outline-primary{% endif %}">
+                        {{ strategy }}
+                    </a>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+    
+    <div class="row">
+        <!-- 左侧：K线图 -->
+        <div class="col-md-8">
+            <div class="card">
+                <div class="card-header">
+                    <h5>K线图 - {% if chart_data %}{{ chart_data.symbol }}{% else %}暂无数据{% endif %}</h5>
+                </div>
+                <div class="card-body">
+                    <div id="klineChart" style="height: 500px;"></div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 右侧：实时日志 -->
+        <div class="col-md-4">
+            <div class="card">
+                <div class="card-header">
+                    <h5>实时日志</h5>
+                </div>
+                <div class="card-body" style="max-height: 500px; overflow-y: auto;">
+                    <div id="logContainer">
+                        {% for trade in trades %}
+                            <div class="log-entry mb-2 p-2 border rounded">
+                                <small class="text-muted">{{ trade.timestamp|date:"H:i:s" }}</small>
+                                <div>
+                                    <strong>{{ trade.strategy_name }}</strong>
+                                    {% if trade.direction == 'BUY' %}
+                                        <span class="badge bg-success">买入</span>
+                                    {% else %}
+                                        <span class="badge bg-danger">卖出</span>
+                                    {% endif %}
+                                    {{ trade.symbol }} @ ¥{{ trade.price|floatformat:2 }}
+                                    <br>
+                                    <small>数量: {{ trade.quantity }} | 手续费: ¥{{ trade.fee|floatformat:2 }}</small>
+                                </div>
+                            </div>
+                        {% empty %}
+                            <p class="text-muted">暂无交易记录</p>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+<script>
+{% if chart_data %}
+var chart = echarts.init(document.getElementById('klineChart'));
+
+var option = {
+    title: {
+        text: '{{ chart_data.symbol }} - K线图',
+        left: 0
+    },
+    tooltip: {
+        trigger: 'axis',
+        axisPointer: {
+            type: 'cross'
+        }
+    },
+    legend: {
+        data: ['K线', '成交量', '主动买入量'],
+        top: 30
+    },
+    grid: [
+        {
+            left: '10%',
+            right: '8%',
+            top: '15%',
+            height: '50%'
+        },
+        {
+            left: '10%',
+            right: '8%',
+            top: '70%',
+            height: '20%'
+        }
+    ],
+    xAxis: [
+        {
+            type: 'category',
+            data: {{ chart_data.dates|safe }},
+            scale: true,
+            boundaryGap: false,
+            axisLine: { onZero: false },
+            splitLine: { show: false },
+            min: 'dataMin',
+            max: 'dataMax'
+        },
+        {
+            type: 'category',
+            gridIndex: 1,
+            data: {{ chart_data.dates|safe }},
+            scale: true,
+            boundaryGap: false,
+            axisLine: { onZero: false },
+            axisTick: { show: false },
+            splitLine: { show: false },
+            min: 'dataMin',
+            max: 'dataMax'
+        }
+    ],
+    yAxis: [
+        {
+            scale: true,
+            splitArea: {
+                show: true
+            }
+        },
+        {
+            scale: true,
+            gridIndex: 1,
+            splitNumber: 2,
+            axisLabel: { show: false },
+            axisLine: { show: false },
+            axisTick: { show: false },
+            splitLine: { show: false }
+        }
+    ],
+    dataZoom: [
+        {
+            type: 'inside',
+            xAxisIndex: [0, 1],
+            start: 50,
+            end: 100
+        },
+        {
+            show: true,
+            xAxisIndex: [0, 1],
+            type: 'slider',
+            top: '90%',
+            start: 50,
+            end: 100
+        }
+    ],
+    series: [
+        {
+            name: 'K线',
+            type: 'candlestick',
+            data: {{ chart_data.kline|safe }},
+            itemStyle: {
+                color: '#26a69a',
+                color0: '#ef5350',
+                borderColor: '#26a69a',
+                borderColor0: '#ef5350'
+            },
+            markPoint: {
+                data: [
+                    {% for point in chart_data.buy_points %}
+                    {
+                        name: '买入',
+                        coord: [{{ point.index }}, {{ point.price }}],
+                        value: {{ point.price }},
+                        itemStyle: { color: '#26a69a' }
+                    },
+                    {% endfor %}
+                    {% for point in chart_data.sell_points %}
+                    {
+                        name: '卖出',
+                        coord: [{{ point.index }}, {{ point.price }}],
+                        value: {{ point.price }},
+                        itemStyle: { color: '#ef5350' }
+                    }
+                    {% endfor %}
+                ]
+            }
+        },
+        {
+            name: '成交量',
+            type: 'bar',
+            xAxisIndex: 1,
+            yAxisIndex: 1,
+            data: {{ chart_data.volume|safe }},
+            itemStyle: {
+                color: function(params) {
+                    var klineData = option.series[0].data[params.dataIndex];
+                    return klineData[1] >= klineData[0] ? '#26a69a' : '#ef5350';
+                }
+            }
+        },
+        {
+            name: '主动买入量',
+            type: 'line',
+            xAxisIndex: 1,
+            yAxisIndex: 1,
+            data: {{ chart_data.taker_buy_volume|safe }},
+            lineStyle: { color: '#42a5f5' },
+            areaStyle: { opacity: 0.3 }
+        }
+    ]
+};
+
+chart.setOption(option);
+
+// 响应式调整
+window.addEventListener('resize', function() {
+    chart.resize();
+});
+{% else %}
+document.getElementById('klineChart').innerHTML = '<p class="text-muted text-center p-5">暂无K线数据</p>';
+{% endif %}
+
+// 自动刷新日志（每5秒）
+setInterval(function() {
+    // TODO: 通过 AJAX 获取最新日志
+}, 5000);
+</script>
+{% endblock %}
+

@@ -23,6 +23,7 @@ INSTALLED_APPS = [
     'apps.analysis',
     'apps.backtest',
     'apps.dashboard',
+    'apps.trading',
 ]
 
 MIDDLEWARE = [
@@ -55,10 +56,43 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'config.wsgi.application'
 
+# 数据库配置
+# 支持 PostgreSQL (生产环境) 和 SQLite (本地开发)
 DATABASES = {
     'default': {
+        # 默认使用 SQLite（本地开发）
         'ENGINE': 'django.db.backends.sqlite3',
         'NAME': BASE_DIR / 'db.sqlite3',
+    }
+}
+
+# 如果设置了环境变量，使用 PostgreSQL（生产环境）
+if os.getenv('USE_POSTGRESQL', '').lower() == 'true':
+    DATABASES['default'] = {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': os.getenv('DB_NAME', 'quant_system'),
+        'USER': os.getenv('DB_USER', 'postgres'),
+        'PASSWORD': os.getenv('DB_PASSWORD', ''),
+        'HOST': os.getenv('DB_HOST', 'localhost'),
+        'PORT': os.getenv('DB_PORT', '5432'),
+        'OPTIONS': {
+            'connect_timeout': 10,
+        },
+    }
+
+# Redis 配置（用于实时行情和任务分发）
+REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
+REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
+REDIS_DB = int(os.getenv('REDIS_DB', 0))
+REDIS_PASSWORD = os.getenv('REDIS_PASSWORD', None)
+
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+        'LOCATION': f'redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}',
+        'OPTIONS': {
+            'PASSWORD': REDIS_PASSWORD,
+        } if REDIS_PASSWORD else {},
     }
 }
 

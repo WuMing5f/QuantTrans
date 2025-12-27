@@ -204,10 +204,17 @@
                         <label>选择标的</label>
                         <select name="symbol" id="symbol" required>
                             <option value="">请选择标的</option>
-                            {% for instrument in instruments %}
-                            <option value="{{ instrument.symbol }}">{{ instrument.symbol }} - {{ instrument.name }}</option>
+                            {% for item in instruments %}
+                            <option value="{{ item.instrument.symbol }}" 
+                                    data-min-date="{{ item.min_date|date:'Y-m-d' }}" 
+                                    data-max-date="{{ item.max_date|date:'Y-m-d' }}"
+                                    data-count="{{ item.count }}">
+                                {{ item.instrument.symbol }} - {{ item.instrument.name }} 
+                                ({{ item.min_date|date:'Y-m-d' }} 至 {{ item.max_date|date:'Y-m-d' }}, {{ item.count }}条)
+                            </option>
                             {% endfor %}
                         </select>
+                        <div id="symbolDataRange" style="margin-top: 5px; color: #4CAF50; font-size: 0.9em; display: none;"></div>
                     </div>
                     <div class="form-group">
                         <label>选择策略</label>
@@ -241,7 +248,10 @@
                     <!-- 策略参数将动态加载到这里 -->
                 </div>
 
-                <button type="button" class="btn-run" id="btnRun" onclick="runBacktest()">开始回测</button>
+                <div style="display: flex; gap: 10px; margin-top: 20px;">
+                    <button type="button" class="btn-run" id="btnRun">开始回测</button>
+                    <button type="button" class="btn-run" id="btnOptimize" style="background-color: #2196F3;">🔍 参数优化</button>
+                </div>
             </form>
         </div>
 
@@ -365,81 +375,463 @@
         };
         
         // 策略选择变化时，显示/隐藏参数和说明
-        document.getElementById('strategy').addEventListener('change', function() {
-            const selectedStrategy = this.value;
-            const paramsContainer = document.getElementById('strategyParams');
-            const descriptionDiv = document.getElementById('strategyDescription');
-            const selectedOption = this.options[this.selectedIndex];
+        function initStrategyParams() {
+            const strategySelect = document.getElementById('strategy');
+            if (!strategySelect) {
+                console.warn('策略选择框未找到，将在100ms后重试');
+                setTimeout(initStrategyParams, 100);
+                return;
+            }
             
-            if (selectedStrategy && strategies[selectedStrategy]) {
-                const strategy = strategies[selectedStrategy];
+            strategySelect.addEventListener('change', function() {
+                const selectedStrategy = this.value;
+                const paramsContainer = document.getElementById('strategyParams');
+                const descriptionDiv = document.getElementById('strategyDescription');
+                const selectedOption = this.options[this.selectedIndex];
                 
-                // 显示策略说明
-                descriptionDiv.textContent = strategy.description;
-                descriptionDiv.style.display = 'block';
+                if (!paramsContainer || !descriptionDiv) {
+                    console.error('策略参数容器未找到');
+                    return;
+                }
                 
-                // 生成参数输入框
-                let html = '<h3 style="color: #4CAF50; margin-bottom: 15px;">策略参数配置</h3>';
-                html += '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 15px;">';
-                
-                for (const [key, value] of Object.entries(strategy.params)) {
-                    const inputType = typeof value === 'number' ? 'number' : 'text';
-                    const step = typeof value === 'number' && value % 1 !== 0 ? '0.01' : '1';
-                    const paramInfo = paramDescriptions[key];
-                    const paramName = key.replace(/_/g, ' ');
+                if (selectedStrategy && strategies[selectedStrategy]) {
+                    const strategy = strategies[selectedStrategy];
                     
-                    // 如果参数说明是对象，使用详细说明；否则使用简单字符串
-                    let title, description;
-                    if (paramInfo && typeof paramInfo === 'object' && paramInfo.title) {
-                        title = paramInfo.title;
-                        description = paramInfo.description || '';
-                    } else {
-                        title = paramInfo && typeof paramInfo === 'string' ? paramInfo : `${key}参数`;
-                        description = '';
+                    // 显示策略说明
+                    descriptionDiv.textContent = strategy.description;
+                    descriptionDiv.style.display = 'block';
+                    
+                    // 生成参数输入框
+                    let html = '<h3 style="color: #4CAF50; margin-bottom: 15px;">策略参数配置</h3>';
+                    html += '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 15px;">';
+                    
+                    for (const [key, value] of Object.entries(strategy.params)) {
+                        const inputType = typeof value === 'number' ? 'number' : 'text';
+                        const step = typeof value === 'number' && value % 1 !== 0 ? '0.01' : '1';
+                        const paramInfo = paramDescriptions[key];
+                        const paramName = key.replace(/_/g, ' ');
+                        
+                        // 如果参数说明是对象，使用详细说明；否则使用简单字符串
+                        let title, description;
+                        if (paramInfo && typeof paramInfo === 'object' && paramInfo.title) {
+                            title = paramInfo.title;
+                            description = paramInfo.description || '';
+                        } else {
+                            title = paramInfo && typeof paramInfo === 'string' ? paramInfo : `${key}参数`;
+                            description = '';
+                        }
+                        
+                        html += `
+                            <div class="param-group" style="display: flex; flex-direction: column; background-color: #1e1e1e; padding: 15px; border-radius: 5px; border: 1px solid #333;">
+                                <label style="margin-bottom: 8px; color: #4CAF50; font-weight: bold; font-size: 1em;">${paramName}</label>
+                                <input type="${inputType}" 
+                                       id="param_${key}"
+                                       name="param_${key}" 
+                                       value="${value}" 
+                                       step="${step}"
+                                       style="width: 100%; padding: 8px; margin-bottom: 8px; background-color: #2d2d2d; border: 1px solid #555; color: #fff; border-radius: 4px;">
+                                <div style="color: #ccc; font-size: 0.9em; font-weight: 500; margin-bottom: 5px;">${title}</div>
+                                ${description ? `<div style="color: #999; font-size: 0.85em; line-height: 1.4; margin-bottom: 5px;">${description}</div>` : ''}
+                            </div>
+                        `;
+                    }
+                    html += '</div>';
+                    
+                    paramsContainer.innerHTML = html;
+                    paramsContainer.classList.add('active');
+                } else {
+                    descriptionDiv.style.display = 'none';
+                    paramsContainer.classList.remove('active');
+                }
+            });
+            
+            // 如果已经有选中的策略，触发一次change事件来显示参数
+            if (strategySelect.value) {
+                strategySelect.dispatchEvent(new Event('change'));
+            }
+        }
+        
+        // 在DOM加载完成后初始化策略参数
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initStrategyParams);
+        } else {
+            initStrategyParams();
+        }
+
+        // 设置最大日期为今天（防止选择未来日期）
+        const today = new Date();
+        // 当选择标的时，自动调整日期范围到该标的的数据范围内
+        const symbolSelect = document.getElementById('symbol');
+        const startDateInput = document.getElementById('start_date');
+        const endDateInput = document.getElementById('end_date');
+        
+        // 设置日期输入框的最大值为今天
+        if (endDateInput) {
+            endDateInput.setAttribute('max', today.toISOString().split('T')[0]);
+        }
+        if (startDateInput) {
+            startDateInput.setAttribute('max', today.toISOString().split('T')[0]);
+        }
+        
+        // 定义一个函数来设置日期范围，可以在change事件和初始化时调用
+        function setDateRangeForSymbol() {
+            console.log('setDateRangeForSymbol 被调用');
+            
+            // 重新获取元素，确保它们存在
+            const symbolSelect = document.getElementById('symbol');
+            const startDateInput = document.getElementById('start_date');
+            const endDateInput = document.getElementById('end_date');
+            
+            if (!symbolSelect) {
+                console.error('symbolSelect 未找到');
+                return;
+            }
+            
+            if (!startDateInput || !endDateInput) {
+                console.error('日期输入框未找到', { startDateInput: !!startDateInput, endDateInput: !!endDateInput });
+                return;
+            }
+            
+            const selectedOption = symbolSelect.options[symbolSelect.selectedIndex];
+            if (!selectedOption || !selectedOption.value) {
+                console.log('未选中标的，设置默认日期');
+                // 如果没有选中标的，设置默认日期
+                const defaultEndDate = new Date(2023, 11, 31); // 2023-12-31
+                const defaultStartDate = new Date(2022, 0, 1); // 2022-01-01
+                if (!endDateInput.value) {
+                    endDateInput.value = defaultEndDate.toISOString().split('T')[0];
+                }
+                if (!startDateInput.value) {
+                    startDateInput.value = defaultStartDate.toISOString().split('T')[0];
+                }
+                return;
+            }
+            
+            const minDate = selectedOption.getAttribute('data-min-date');
+            const maxDate = selectedOption.getAttribute('data-max-date');
+            const count = selectedOption.getAttribute('data-count');
+            const dataRangeDiv = document.getElementById('symbolDataRange');
+            
+            console.log('========================================');
+            console.log('📋 从选项获取的原始数据:');
+            console.log('  标的代码:', selectedOption.value);
+            console.log('  最小日期(data-min-date):', minDate);
+            console.log('  最大日期(data-max-date):', maxDate);
+            console.log('  数据条数(data-count):', count);
+            console.log('  当前开始日期输入框值:', startDateInput ? startDateInput.value : 'N/A');
+            console.log('  当前结束日期输入框值:', endDateInput ? endDateInput.value : 'N/A');
+            console.log('========================================');
+            
+            if (minDate && maxDate) {
+                // 显示数据范围提示
+                if (dataRangeDiv) {
+                    dataRangeDiv.style.display = 'block';
+                    dataRangeDiv.innerHTML = `📊 数据范围: ${minDate} 至 ${maxDate} (共${count}条数据)`;
+                }
+                
+                // 确保不超过今天（过滤未来日期）
+                const today = new Date();
+                today.setHours(0, 0, 0, 0);
+                const maxDateObj = new Date(maxDate);
+                maxDateObj.setHours(0, 0, 0, 0);
+                const minDateObj = new Date(minDate);
+                minDateObj.setHours(0, 0, 0, 0);
+                
+                // 如果最大日期是未来日期，使用今天
+                const effectiveMaxDate = maxDateObj > today ? today : maxDateObj;
+                
+                // 计算合适的日期范围（使用数据的80%范围，留一些余量）
+                const totalDays = (effectiveMaxDate - minDateObj) / (1000 * 60 * 60 * 24);
+                
+                let finalStartDate, finalEndDate;
+                
+                // 如果数据范围足够大（超过90天），使用80%的范围
+                if (totalDays > 90) {
+                    const rangeDays = Math.floor(totalDays * 0.8);
+                    const adjustedStartDate = new Date(effectiveMaxDate);
+                    adjustedStartDate.setDate(adjustedStartDate.getDate() - rangeDays);
+                    
+                    // 确保开始日期不小于最小日期
+                    finalStartDate = adjustedStartDate < minDateObj ? minDateObj : adjustedStartDate;
+                    finalEndDate = effectiveMaxDate;
+                } else {
+                    // 如果数据范围较小，使用全部范围
+                    finalStartDate = minDateObj;
+                    finalEndDate = effectiveMaxDate;
+                }
+                
+                // 设置日期值 - 使用YYYY-MM-DD格式
+                const startDateStr = finalStartDate.getFullYear() + '-' + 
+                    String(finalStartDate.getMonth() + 1).padStart(2, '0') + '-' + 
+                    String(finalStartDate.getDate()).padStart(2, '0');
+                const endDateStr = finalEndDate.getFullYear() + '-' + 
+                    String(finalEndDate.getMonth() + 1).padStart(2, '0') + '-' + 
+                    String(finalEndDate.getDate()).padStart(2, '0');
+                
+                console.log('========================================');
+                console.log('📅 计算后的日期值:');
+                console.log('  开始日期对象:', finalStartDate);
+                console.log('  结束日期对象:', finalEndDate);
+                console.log('  开始日期字符串:', startDateStr);
+                console.log('  结束日期字符串:', endDateStr);
+                console.log('========================================');
+                console.log('日期输入框状态:', {
+                    startDateInput: {
+                        exists: !!startDateInput,
+                        currentValue: startDateInput ? startDateInput.value : 'N/A',
+                        type: startDateInput ? startDateInput.type : 'N/A',
+                        id: startDateInput ? startDateInput.id : 'N/A'
+                    },
+                    endDateInput: {
+                        exists: !!endDateInput,
+                        currentValue: endDateInput ? endDateInput.value : 'N/A',
+                        type: endDateInput ? endDateInput.type : 'N/A',
+                        id: endDateInput ? endDateInput.id : 'N/A'
+                    }
+                });
+                
+                // 强制设置日期值 - 使用多种方式确保设置成功
+                console.log('========================================');
+                console.log('🔧 开始设置日期到输入框...');
+                
+                if (startDateInput) {
+                    console.log('  设置前 - 开始日期输入框:');
+                    console.log('    value属性:', startDateInput.value);
+                    console.log('    getAttribute("value"):', startDateInput.getAttribute('value'));
+                    console.log('    defaultValue:', startDateInput.defaultValue);
+                    console.log('    type:', startDateInput.type);
+                    console.log('    id:', startDateInput.id);
+                    
+                    // 方法1: 直接设置value属性
+                    startDateInput.value = startDateStr;
+                    console.log('  ✓ 方法1: value = "' + startDateStr + '" → 当前value:', startDateInput.value);
+                    
+                    // 方法2: 设置value属性
+                    startDateInput.setAttribute('value', startDateStr);
+                    console.log('  ✓ 方法2: setAttribute("value") → 当前value:', startDateInput.value);
+                    
+                    // 方法3: 设置defaultValue
+                    startDateInput.defaultValue = startDateStr;
+                    console.log('  ✓ 方法3: defaultValue → 当前value:', startDateInput.value);
+                    
+                    // 触发事件
+                    startDateInput.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+                    startDateInput.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+                    
+                    console.log('  设置后 - 开始日期输入框:');
+                    console.log('    value属性:', startDateInput.value);
+                    console.log('    getAttribute("value"):', startDateInput.getAttribute('value'));
+                    console.log('    defaultValue:', startDateInput.defaultValue);
+                } else {
+                    console.error('  ❌ startDateInput 不存在!');
+                }
+                
+                if (endDateInput) {
+                    console.log('  设置前 - 结束日期输入框:');
+                    console.log('    value属性:', endDateInput.value);
+                    console.log('    getAttribute("value"):', endDateInput.getAttribute('value'));
+                    console.log('    defaultValue:', endDateInput.defaultValue);
+                    console.log('    type:', endDateInput.type);
+                    console.log('    id:', endDateInput.id);
+                    
+                    // 方法1: 直接设置value属性
+                    endDateInput.value = endDateStr;
+                    console.log('  ✓ 方法1: value = "' + endDateStr + '" → 当前value:', endDateInput.value);
+                    
+                    // 方法2: 设置value属性
+                    endDateInput.setAttribute('value', endDateStr);
+                    console.log('  ✓ 方法2: setAttribute("value") → 当前value:', endDateInput.value);
+                    
+                    // 方法3: 设置defaultValue
+                    endDateInput.defaultValue = endDateStr;
+                    console.log('  ✓ 方法3: defaultValue → 当前value:', endDateInput.value);
+                    
+                    // 触发事件
+                    endDateInput.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+                    endDateInput.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+                    
+                    console.log('  设置后 - 结束日期输入框:');
+                    console.log('    value属性:', endDateInput.value);
+                    console.log('    getAttribute("value"):', endDateInput.getAttribute('value'));
+                    console.log('    defaultValue:', endDateInput.defaultValue);
+                } else {
+                    console.error('  ❌ endDateInput 不存在!');
+                }
+                console.log('========================================');
+                
+                // 再次验证设置是否成功
+                setTimeout(function() {
+                    const startVal = startDateInput ? startDateInput.value : 'N/A';
+                    const endVal = endDateInput ? endDateInput.value : 'N/A';
+                    
+                    console.log('========================================');
+                    console.log('🔍 验证日期设置结果 (200ms后):');
+                    console.log('  开始日期:');
+                    console.log('    期望值:', startDateStr);
+                    console.log('    实际值:', startVal);
+                    console.log('    是否匹配:', startVal === startDateStr ? '✅ 是' : '❌ 否');
+                    console.log('    是否为空:', startVal === '' ? '⚠️ 是' : '否');
+                    console.log('  结束日期:');
+                    console.log('    期望值:', endDateStr);
+                    console.log('    实际值:', endVal);
+                    console.log('    是否匹配:', endVal === endDateStr ? '✅ 是' : '❌ 否');
+                    console.log('    是否为空:', endVal === '' ? '⚠️ 是' : '否');
+                    
+                    // 如果设置失败，尝试再次设置
+                    if (startDateInput && startVal !== startDateStr) {
+                        console.warn('  ⚠️ 开始日期设置失败，尝试再次设置...');
+                        startDateInput.value = startDateStr;
+                        startDateInput.setAttribute('value', startDateStr);
+                        console.log('    重试后value:', startDateInput.value);
+                    }
+                    if (endDateInput && endVal !== endDateStr) {
+                        console.warn('  ⚠️ 结束日期设置失败，尝试再次设置...');
+                        endDateInput.value = endDateStr;
+                        endDateInput.setAttribute('value', endDateStr);
+                        console.log('    重试后value:', endDateInput.value);
+                    }
+                    console.log('========================================');
+                }, 200);
+                
+                // 设置日期输入框的最小值和最大值（限制在有效范围内）
+                startDateInput.setAttribute('min', minDate);
+                startDateInput.setAttribute('max', effectiveMaxDate.toISOString().split('T')[0]);
+                endDateInput.setAttribute('min', minDate);
+                endDateInput.setAttribute('max', effectiveMaxDate.toISOString().split('T')[0]);
+            } else {
+                console.warn('未找到日期范围数据', { minDate, maxDate });
+                if (dataRangeDiv) {
+                    dataRangeDiv.style.display = 'none';
+                }
+            }
+        }
+        
+        // 确保在DOM加载完成后绑定事件
+        function initDateRangeHandler() {
+            const symbolSelect = document.getElementById('symbol');
+            const startDateInput = document.getElementById('start_date');
+            const endDateInput = document.getElementById('end_date');
+            
+            if (!symbolSelect) {
+                console.warn('symbolSelect 未找到，将在100ms后重试');
+                setTimeout(initDateRangeHandler, 100);
+                return;
+            }
+            
+            if (!startDateInput || !endDateInput) {
+                console.warn('日期输入框未找到，将在100ms后重试');
+                setTimeout(initDateRangeHandler, 100);
+                return;
+            }
+            
+            console.log('初始化日期范围处理器');
+            
+            // 监听标的选择变化
+            symbolSelect.addEventListener('change', function() {
+                console.log('标的选择变化:', this.value);
+                setDateRangeForSymbol();
+            });
+            
+            // 检查是否有选中的标的并自动设置日期
+            if (symbolSelect.selectedIndex > 0 && symbolSelect.value) {
+                console.log('页面加载时自动设置日期，选中的标的:', symbolSelect.value);
+                // 延迟一点执行，确保DOM完全加载
+                setTimeout(function() {
+                    setDateRangeForSymbol();
+                }, 50);
+            } else if (!startDateInput.value && !endDateInput.value) {
+                // 如果没有选中标的且日期为空，设置默认日期
+                const defaultEndDate = new Date(2023, 11, 31); // 2023-12-31
+                const defaultStartDate = new Date(2022, 0, 1); // 2022-01-01
+                endDateInput.value = defaultEndDate.toISOString().split('T')[0];
+                startDateInput.value = defaultStartDate.toISOString().split('T')[0];
+                console.log('设置默认日期:', startDateInput.value, '到', endDateInput.value);
+            }
+        }
+        
+        // 在DOM加载完成后初始化
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initDateRangeHandler);
+        } else {
+            // DOM已经加载完成
+            initDateRangeHandler();
+        }
+        
+        // 添加日期验证（在DOM加载完成后）
+        function initDateValidation() {
+            const startDateInput = document.getElementById('start_date');
+            const endDateInput = document.getElementById('end_date');
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            
+            if (startDateInput) {
+                startDateInput.addEventListener('change', function() {
+                    const startDate = new Date(this.value);
+                    const endDateInput = document.getElementById('end_date');
+                    const endDate = new Date(endDateInput.value);
+                    
+                    if (startDate > today) {
+                        alert('⚠️ 开始日期不能是未来日期！已自动调整为今天');
+                        this.value = today.toISOString().split('T')[0];
                     }
                     
-                    html += `
-                        <div class="param-group" style="display: flex; flex-direction: column; background-color: #1e1e1e; padding: 15px; border-radius: 5px; border: 1px solid #333;">
-                            <label style="margin-bottom: 8px; color: #4CAF50; font-weight: bold; font-size: 1em;">${paramName}</label>
-                            <input type="${inputType}" 
-                                   name="param_${key}" 
-                                   value="${value}" 
-                                   step="${step}"
-                                   style="width: 100%; padding: 8px; margin-bottom: 8px; background-color: #2d2d2d; border: 1px solid #555; color: #fff; border-radius: 4px;">
-                            <div style="color: #ccc; font-size: 0.9em; font-weight: 500; margin-bottom: 5px;">${title}</div>
-                            ${description ? `<div style="color: #999; font-size: 0.85em; line-height: 1.4; margin-bottom: 5px;">${description}</div>` : ''}
-                        </div>
-                    `;
-                }
-                html += '</div>';
-                
-                paramsContainer.innerHTML = html;
-                paramsContainer.classList.add('active');
-            } else {
-                descriptionDiv.style.display = 'none';
-                paramsContainer.classList.remove('active');
+                    if (startDate > endDate) {
+                        alert('⚠️ 开始日期不能晚于结束日期！已自动调整');
+                        endDateInput.value = this.value;
+                    }
+                });
             }
-        });
-
-        // 设置默认日期（最近1年）
-        const today = new Date();
-        const oneYearAgo = new Date(today.getFullYear() - 1, today.getMonth(), today.getDate());
-        document.getElementById('end_date').value = today.toISOString().split('T')[0];
-        document.getElementById('start_date').value = oneYearAgo.toISOString().split('T')[0];
+            
+            if (endDateInput) {
+                endDateInput.addEventListener('change', function() {
+                    const endDate = new Date(this.value);
+                    const startDateInput = document.getElementById('start_date');
+                    const startDate = new Date(startDateInput.value);
+                    
+                    if (endDate > today) {
+                        alert('⚠️ 结束日期不能是未来日期！已自动调整为今天');
+                        this.value = today.toISOString().split('T')[0];
+                    }
+                    
+                    if (endDate < startDate) {
+                        alert('⚠️ 结束日期不能早于开始日期！已自动调整');
+                        startDateInput.value = this.value;
+                    }
+                });
+            }
+        }
+        
+        // 在DOM加载完成后初始化日期验证
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initDateValidation);
+        } else {
+            initDateValidation();
+        }
         
         // 数据粒度选择变化
-        document.getElementById('data_type').addEventListener('change', function() {
-            const intervalGroup = document.getElementById('intervalGroup');
-            const dataTypeHint = document.getElementById('dataTypeHint');
-            
-            if (this.value === 'minute') {
-                intervalGroup.style.display = 'block';
-                dataTypeHint.textContent = '分钟K数据适用于短期策略和日内交易回测，数据量大';
-            } else {
-                intervalGroup.style.display = 'none';
-                dataTypeHint.textContent = '日K数据适用于长期策略回测，数据更稳定';
-            }
-        });
+        const dataTypeSelect = document.getElementById('data_type');
+        if (dataTypeSelect) {
+            dataTypeSelect.addEventListener('change', function() {
+                const intervalGroup = document.getElementById('intervalGroup');
+                const dataTypeHint = document.getElementById('dataTypeHint');
+                
+                if (this.value === 'minute') {
+                    if (intervalGroup) {
+                        intervalGroup.style.display = 'block';
+                    }
+                    if (dataTypeHint) {
+                        dataTypeHint.textContent = '分钟K数据适用于短期策略和日内交易回测，数据量大';
+                    }
+                } else {
+                    if (intervalGroup) {
+                        intervalGroup.style.display = 'none';
+                    }
+                    if (dataTypeHint) {
+                        dataTypeHint.textContent = '日K数据适用于长期策略回测，数据更稳定';
+                    }
+                }
+            });
+        }
 
         // 回测函数
         function runBacktest() {
@@ -572,6 +964,447 @@
                 error.classList.add('active');
                 console.error('Backtest error:', err);
             });
+        }
+        
+        // 参数优化函数
+        function runOptimize() {
+            console.log('runOptimize() called');
+            
+            const backtestForm = document.getElementById('backtestForm');
+            if (!backtestForm) {
+                console.error('Form not found!');
+                return;
+            }
+            
+            const formData = new FormData(backtestForm);
+            const btnOptimize = document.getElementById('btnOptimize');
+            const loading = document.getElementById('loading');
+            const error = document.getElementById('error');
+            const resultContainer = document.getElementById('resultContainer');
+            
+            // 验证必填字段
+            const symbol = formData.get('symbol');
+            const strategy = formData.get('strategy');
+            const startDate = formData.get('start_date');
+            const endDate = formData.get('end_date');
+            
+            if (!symbol || !strategy || !startDate || !endDate) {
+                error.textContent = '请先选择标的,策略和日期范围';
+                error.classList.add('active');
+                return;
+            }
+            
+            // 验证日期范围
+            const start = new Date(startDate);
+            const end = new Date(endDate);
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            
+            if (start > today || end > today) {
+                error.textContent = '错误: 不能选择未来日期!请使用历史日期范围(例如: 2022-01-01 到 2023-12-31)';
+                error.classList.add('active');
+                loading.classList.remove('active');
+                btnOptimize.disabled = false;
+                return;
+            }
+            
+            if (start > end) {
+                error.textContent = '错误: 开始日期不能晚于结束日期';
+                error.classList.add('active');
+                loading.classList.remove('active');
+                btnOptimize.disabled = false;
+                return;
+            }
+            
+            // 检查日期范围是否太短(至少需要1个月的数据)
+            const daysDiff = (end - start) / (1000 * 60 * 60 * 24);
+            if (daysDiff < 30) {
+                const daysRounded = Math.round(daysDiff);
+                const confirmMsg = '⚠️ 警告: 日期范围只有 ' + daysRounded + ' 天,可能数据不足导致策略无法产生交易信号.\n\n建议使用至少3-6个月的历史数据.\n\n是否继续?';
+                if (!confirm(confirmMsg)) {
+                    loading.classList.remove('active');
+                    btnOptimize.disabled = false;
+                    return;
+                }
+            }
+            
+            // 禁用按钮,显示加载
+            btnOptimize.disabled = true;
+            loading.style.display = 'block';
+            loading.classList.add('active');
+            loading.querySelector('p').textContent = '正在优化参数,请稍候...(这可能需要几分钟)';
+            error.classList.remove('active');
+            resultContainer.style.display = 'none';
+            
+            // 获取CSRF token
+            const csrfTokenElement = document.querySelector('[name=csrfmiddlewaretoken]');
+            if (!csrfTokenElement) {
+                error.textContent = '错误: CSRF token未找到,请刷新页面重试';
+                error.classList.add('active');
+                loading.classList.remove('active');
+                btnOptimize.disabled = false;
+                return;
+            }
+            const csrfToken = csrfTokenElement.value;
+            
+            // 打印调试信息,确认日期范围
+            console.log('参数优化 - 使用的日期范围:');
+            console.log('  开始日期:', startDate);
+            console.log('  结束日期:', endDate);
+            console.log('  标的:', symbol);
+            console.log('  策略:', strategy);
+            
+            // 发送请求
+            fetch('{% url "optimize_strategy_api" %}', {
+                method: 'POST',
+                headers: {
+                    'X-CSRFToken': csrfToken
+                },
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log('Optimize response received:', data);
+                console.log('Best chart data:', data.best_chart_data);
+                console.log('Top results sample:', data.top_results?.[0]);
+                console.log('Best by return:', data.best_by_return);
+                loading.classList.remove('active');
+                loading.style.display = 'none';
+                btnOptimize.disabled = false;
+                
+                if (data.error) {
+                    console.error('Optimize error:', data.error);
+                    error.textContent = '错误: ' + data.error;
+                    error.style.display = 'block';
+                    error.classList.add('active');
+                    return;
+                }
+                
+                // 显示优化结果
+                displayOptimizeResults(data);
+                
+                // 滚动到结果区域
+                setTimeout(() => {
+                    resultContainer.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }, 100);
+            })
+            .catch(err => {
+                loading.classList.remove('active');
+                btnOptimize.disabled = false;
+                error.textContent = '错误: ' + (err.message || '参数优化失败,请检查参数和数据');
+                error.classList.add('active');
+                console.error('Optimize error:', err);
+            });
+        }
+        
+        // 绑定按钮的点击事件（在页面加载完成后）
+        (function() {
+            function bindButtons() {
+                // 绑定回测按钮
+                const btnRun = document.getElementById('btnRun');
+                if (btnRun) {
+                    btnRun.addEventListener('click', function(e) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        console.log('回测按钮被点击');
+                        runBacktest();
+                        return false;
+                    });
+                    console.log('回测按钮事件已绑定');
+                } else {
+                    console.warn('回测按钮未找到');
+                }
+                
+                // 绑定参数优化按钮
+                const btnOptimize = document.getElementById('btnOptimize');
+                if (btnOptimize) {
+                    btnOptimize.addEventListener('click', function(e) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        console.log('参数优化按钮被点击');
+                        runOptimize();
+                        return false;
+                    });
+                    console.log('参数优化按钮事件已绑定');
+                } else {
+                    console.warn('参数优化按钮未找到');
+                }
+                
+                // 如果按钮未找到，重试
+                if (!btnRun || !btnOptimize) {
+                    setTimeout(bindButtons, 100);
+                }
+            }
+            
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', bindButtons);
+            } else {
+                bindButtons();
+            }
+        })();
+        
+        function displayOptimizeResults(data) {
+            const resultContainer = document.getElementById('resultContainer');
+            const statsContainer = document.getElementById('resultStats');
+            
+            // 确保结果容器可见
+            resultContainer.style.display = 'block';
+            resultContainer.classList.add('active');
+            
+            // 检查是否有有效结果
+            const hasValidResults = data.valid_results > 0;
+            const allZeroTrades = data.top_results && data.top_results.every(r => (r.total_trades || 0) === 0);
+            
+            // 显示优化结果统计
+            let statsHtml = `
+                <div class="stat-card" style="grid-column: 1 / -1; background: linear-gradient(135deg, #2196F3 0%, #1976D2 100%);">
+                    <div class="stat-label" style="color: #fff; font-size: 18px; font-weight: bold;">参数优化结果</div>
+                    <div class="stat-value" style="color: #fff; font-size: 16px;">
+                        测试了 ${data.total_combinations || 0} 个参数组合，${data.valid_results || 0} 个有效结果
+                    </div>
+            `;
+            
+            // 如果所有结果都没有交易，显示警告
+            if (allZeroTrades) {
+                statsHtml += `
+                    <div style="margin-top: 15px; padding: 15px; background: rgba(239, 83, 80, 0.2); border: 2px solid #ef5350; border-radius: 5px;">
+                        <strong style="color: #ef5350; font-size: 16px;">⚠️ 警告：所有参数组合都没有产生交易！</strong>
+                        <div style="color: #fff; margin-top: 10px; line-height: 1.6;">
+                            <p><strong>可能的原因：</strong></p>
+                            <ul style="margin-left: 20px; margin-top: 5px;">
+                                <li>❌ <strong>日期范围问题</strong>：选择了未来日期或没有数据的日期范围</li>
+                                <li>❌ <strong>数据不足</strong>：日期范围太短，数据点不够（策略至少需要20-40条数据）</li>
+                                <li>❌ <strong>策略条件未触发</strong>：在选择的日期范围内，策略的买入/卖出条件没有发生</li>
+                            </ul>
+                            <p style="margin-top: 10px;"><strong>💡 解决方案：</strong></p>
+                            <ul style="margin-left: 20px; margin-top: 5px;">
+                                <li>✅ 使用历史日期范围（如：2022-01-01 到 2023-12-31）</li>
+                                <li>✅ 确保日期范围至少有3-6个月的数据</li>
+                                <li>✅ 检查标的是否有足够的历史数据</li>
+                                <li>✅ 尝试更长的日期范围或不同的策略</li>
+                            </ul>
+                        </div>
+                    </div>
+                `;
+            }
+            
+            statsHtml += `</div>`;
+            
+            // 如果所有结果都没有交易，显示警告
+            if (allZeroTrades) {
+                statsHtml += `
+                    <div style="margin-top: 15px; padding: 15px; background: rgba(239, 83, 80, 0.2); border: 2px solid #ef5350; border-radius: 5px;">
+                        <strong style="color: #ef5350; font-size: 16px;">⚠️ 警告：所有参数组合都没有产生交易！</strong>
+                        <div style="color: #fff; margin-top: 10px; line-height: 1.6;">
+                            <p><strong>可能的原因：</strong></p>
+                            <ul style="margin-left: 20px; margin-top: 5px;">
+                                <li>❌ <strong>日期范围问题</strong>：选择了未来日期或没有数据的日期范围</li>
+                                <li>❌ <strong>数据不足</strong>：日期范围太短，数据点不够（策略至少需要20-40条数据）</li>
+                                <li>❌ <strong>策略条件未触发</strong>：在选择的日期范围内，策略的买入/卖出条件没有发生</li>
+                            </ul>
+                            <p style="margin-top: 10px;"><strong>💡 解决方案：</strong></p>
+                            <ul style="margin-left: 20px; margin-top: 5px;">
+                                <li>✅ 使用历史日期范围（如：2022-01-01 到 2023-12-31）</li>
+                                <li>✅ 确保日期范围至少有3-6个月的数据</li>
+                                <li>✅ 检查标的是否有足够的历史数据</li>
+                                <li>✅ 尝试更长的日期范围或不同的策略</li>
+                            </ul>
+                        </div>
+                    </div>
+                `;
+            }
+            
+            statsHtml += `</div>`;
+            statsContainer.innerHTML = statsHtml;
+            
+            // 显示最佳参数
+            if (data.best_by_return) {
+                const best = data.best_by_return;
+                // 确保数值正确显示
+                const totalReturn = parseFloat(best.total_return || 0);
+                const annualReturn = parseFloat(best.annual_return || 0);
+                const sharpeRatio = parseFloat(best.sharpe_ratio || 0);
+                const maxDrawdown = parseFloat(best.max_drawdown || 0);
+                const totalTrades = parseInt(best.total_trades || 0);
+                
+                // 调试：打印最佳参数数据
+                console.log('最佳参数数据:', {
+                    best: best,
+                    totalReturn: totalReturn,
+                    totalTrades: totalTrades,
+                    annualReturn: annualReturn,
+                    sharpeRatio: sharpeRatio
+                });
+                
+                statsContainer.innerHTML += `
+                    <div class="stat-card" style="grid-column: 1 / -1; background: #2d2d2d; border: 2px solid #4CAF50; padding: 20px;">
+                        <h3 style="color: #4CAF50; margin-top: 0;">🏆 最佳参数（按总收益率）</h3>
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-top: 15px;">
+                            <div>
+                                <strong style="color: #ccc;">参数组合：</strong>
+                                <pre style="background: #1e1e1e; padding: 10px; border-radius: 5px; color: #4CAF50; margin-top: 5px; overflow-x: auto;">${JSON.stringify(best.params, null, 2)}</pre>
+                            </div>
+                            <div>
+                                <div style="margin-bottom: 10px;">
+                                    <strong style="color: #ccc;">总收益率：</strong>
+                                    <span style="color: ${totalReturn >= 0 ? '#4CAF50' : '#ef5350'}; font-size: 18px; font-weight: bold;">
+                                        ${totalReturn >= 0 ? '+' : ''}${totalReturn.toFixed(2)}%
+                                    </span>
+                                </div>
+                                <div style="margin-bottom: 10px;">
+                                    <strong style="color: #ccc;">年化收益率：</strong>
+                                    <span style="color: ${annualReturn >= 0 ? '#4CAF50' : '#ef5350'};">
+                                        ${annualReturn >= 0 ? '+' : ''}${annualReturn.toFixed(2)}%
+                                    </span>
+                                </div>
+                                <div style="margin-bottom: 10px;">
+                                    <strong style="color: #ccc;">夏普比率：</strong>
+                                    <span>${sharpeRatio.toFixed(3)}</span>
+                                </div>
+                                <div style="margin-bottom: 10px;">
+                                    <strong style="color: #ccc;">最大回撤：</strong>
+                                    <span style="color: #ef5350;">${maxDrawdown.toFixed(2)}%</span>
+                                </div>
+                                <div>
+                                    <strong style="color: #ccc;">交易次数：</strong>
+                                    <span>${totalTrades}</span>
+                                </div>
+                            </div>
+                        </div>
+                        <button onclick="applyBestParams(${JSON.stringify(best.params).replace(/"/g, '&quot;')})" 
+                                style="margin-top: 15px; padding: 10px 20px; background: #4CAF50; color: white; border: none; border-radius: 5px; cursor: pointer;">
+                            ✅ 应用此参数
+                        </button>
+                    </div>
+                `;
+            }
+            
+            // 显示前10个最佳结果
+            if (data.top_results && data.top_results.length > 0) {
+                let topResultsHtml = `
+                    <div class="stat-card" style="grid-column: 1 / -1; background: #2d2d2d; padding: 20px;">
+                        <h3 style="color: #4CAF50; margin-top: 0;">📊 前10个最佳参数组合</h3>
+                        <div style="overflow-x: auto;">
+                            <table style="width: 100%; border-collapse: collapse; margin-top: 15px; min-width: 800px;">
+                                <thead>
+                                    <tr style="background: #1e1e1e;">
+                                        <th style="padding: 10px; text-align: left; border-bottom: 1px solid #444;">排名</th>
+                                        <th style="padding: 10px; text-align: left; border-bottom: 1px solid #444;">参数</th>
+                                        <th style="padding: 10px; text-align: right; border-bottom: 1px solid #444;">总收益率</th>
+                                        <th style="padding: 10px; text-align: right; border-bottom: 1px solid #444;">年化收益率</th>
+                                        <th style="padding: 10px; text-align: right; border-bottom: 1px solid #444;">夏普比率</th>
+                                        <th style="padding: 10px; text-align: right; border-bottom: 1px solid #444;">交易次数</th>
+                                        <th style="padding: 10px; text-align: center; border-bottom: 1px solid #444;">操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                `;
+                
+                data.top_results.forEach((result, index) => {
+                    const params = result.strategy_params || {};
+                    // 确保数值正确显示（处理可能的null或undefined）
+                    const totalReturn = parseFloat(result.total_return_pct || 0);
+                    const annualReturn = parseFloat(result.annual_return_pct || 0);
+                    const sharpeRatio = parseFloat(result.sharpe_ratio || 0);
+                    const totalTrades = parseInt(result.total_trades || 0);
+                    
+                    // 调试：打印第一个结果的数据
+                    if (index === 0) {
+                        console.log('第一个结果的数据:', {
+                            result: result,
+                            total_return_pct: result.total_return_pct,
+                            total_trades: result.total_trades,
+                            annual_return_pct: result.annual_return_pct,
+                            sharpe_ratio: result.sharpe_ratio,
+                            parsed_totalReturn: totalReturn,
+                            parsed_totalTrades: totalTrades
+                        });
+                    }
+                    
+                    topResultsHtml += `
+                        <tr style="border-bottom: 1px solid #333;">
+                            <td style="padding: 10px;">${index + 1}</td>
+                            <td style="padding: 10px;">
+                                <code style="font-size: 0.85em; color: #4CAF50;">${JSON.stringify(params)}</code>
+                            </td>
+                            <td style="padding: 10px; text-align: right; color: ${totalReturn >= 0 ? '#4CAF50' : '#ef5350'};">
+                                ${totalReturn >= 0 ? '+' : ''}${totalReturn.toFixed(2)}%
+                            </td>
+                            <td style="padding: 10px; text-align: right; color: ${annualReturn >= 0 ? '#4CAF50' : '#ef5350'};">
+                                ${annualReturn >= 0 ? '+' : ''}${annualReturn.toFixed(2)}%
+                            </td>
+                            <td style="padding: 10px; text-align: right;">${sharpeRatio.toFixed(3)}</td>
+                            <td style="padding: 10px; text-align: right;">${totalTrades}</td>
+                            <td style="padding: 10px; text-align: center;">
+                                <button onclick="applyBestParams(${JSON.stringify(params).replace(/"/g, '&quot;')})" 
+                                        style="padding: 5px 10px; background: #2196F3; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 0.85em;">
+                                    应用
+                                </button>
+                            </td>
+                        </tr>
+                    `;
+                });
+                
+                topResultsHtml += `
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                `;
+                
+                statsContainer.innerHTML += topResultsHtml;
+            }
+            
+            // 如果最佳参数有图表数据，显示最佳参数的收益曲线
+            if (data.best_chart_data && data.best_chart_data.equity_curve && data.best_chart_data.equity_curve.length > 0) {
+                console.log('显示最佳参数的收益曲线', {
+                    equity_curve_length: data.best_chart_data.equity_curve.length,
+                    trade_points: data.best_chart_data.trade_points,
+                    trade_points_length: (data.best_chart_data.trade_points || []).length,
+                    trade_points_type: typeof data.best_chart_data.trade_points,
+                    initial_cash: data.best_chart_data.initial_cash
+                });
+                setTimeout(() => {
+                    // 确保 trade_points 是数组
+                    let tradePoints = data.best_chart_data.trade_points;
+                    if (!Array.isArray(tradePoints)) {
+                        console.warn('trade_points 不是数组，转换为数组:', tradePoints);
+                        tradePoints = tradePoints ? [tradePoints] : [];
+                    }
+                    console.log('准备绘制图表，交易点数:', tradePoints.length, '交易点数据:', tradePoints);
+                    initEquityChart(
+                        data.best_chart_data.equity_curve, 
+                        data.best_chart_data.initial_cash, 
+                        tradePoints
+                    );
+                }, 200);
+            } else {
+                console.log('没有图表数据', {
+                    has_best_chart_data: !!data.best_chart_data,
+                    has_equity_curve: !!(data.best_chart_data && data.best_chart_data.equity_curve),
+                    equity_curve_length: data.best_chart_data?.equity_curve?.length || 0
+                });
+                // 如果没有图表数据，清除之前的图表
+                const chartElement = document.getElementById('resultChart');
+                if (chartElement) {
+                    chartElement.innerHTML = '<p style="color: #999; text-align: center; padding: 40px;">暂无图表数据</p>';
+                }
+            }
+        }
+        
+        function applyBestParams(params) {
+            // 应用最佳参数到表单
+            console.log('Applying params:', params);
+            
+            // 更新参数输入框
+            for (const [key, value] of Object.entries(params)) {
+                const input = document.getElementById(`param_${key}`);
+                if (input) {
+                    input.value = value;
+                }
+            }
+            
+            alert('参数已应用到表单，可以点击"开始回测"进行验证！');
         }
         
         // 表单提交事件（备用，防止用户直接提交表单）

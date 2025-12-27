@@ -1,0 +1,197 @@
+{% extends "dashboard/base.html" %}
+{% load static %}
+
+{% block title %}总览仪表盘 - 量化交易系统{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <!-- 顶部卡片 -->
+    <div class="row mb-4">
+        <!-- 总资产 -->
+        <div class="col-md-3">
+            <div class="card text-white bg-primary">
+                <div class="card-body">
+                    <h5 class="card-title">总资产</h5>
+                    <h2 class="mb-0">¥{{ total_equity|floatformat:2 }}</h2>
+                    <small>持仓市值 + 现金</small>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 今日盈亏 -->
+        <div class="col-md-3">
+            <div class="card text-white {% if today_pnl >= 0 %}bg-success{% else %}bg-danger{% endif %}">
+                <div class="card-body">
+                    <h5 class="card-title">今日盈亏</h5>
+                    <h2 class="mb-0">¥{{ today_pnl|floatformat:2 }}</h2>
+                    <small>今日交易盈亏</small>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 持仓风险 -->
+        <div class="col-md-3">
+            <div class="card text-white {% if position_risk > 80 %}bg-danger{% elif position_risk > 60 %}bg-warning{% else %}bg-info{% endif %}">
+                <div class="card-body">
+                    <h5 class="card-title">当前仓位</h5>
+                    <h2 class="mb-0">{{ position_risk|floatformat:1 }}%</h2>
+                    <small>持仓市值 / 总资产</small>
+                </div>
+            </div>
+        </div>
+        
+        <!-- API连接状态 -->
+        <div class="col-md-3">
+            <div class="card">
+                <div class="card-body">
+                    <h5 class="card-title">API连接状态</h5>
+                    <ul class="list-unstyled mb-0">
+                        <li>
+                            uSmart: 
+                            {% if api_status.usmart %}
+                                <span class="badge bg-success">✓ 正常</span>
+                            {% else %}
+                                <span class="badge bg-danger">✗ 断开</span>
+                            {% endif %}
+                        </li>
+                        <li>
+                            AkShare: 
+                            {% if api_status.akshare %}
+                                <span class="badge bg-success">✓ 正常</span>
+                            {% else %}
+                                <span class="badge bg-danger">✗ 断开</span>
+                            {% endif %}
+                        </li>
+                        <li>
+                            Redis: 
+                            {% if api_status.redis %}
+                                <span class="badge bg-success">✓ 正常</span>
+                            {% else %}
+                                <span class="badge bg-warning">⚠ 未连接</span>
+                            {% endif %}
+                        </li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 紧急按钮 -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="alert alert-danger">
+                <h5 class="alert-heading">⚠️ 紧急操作</h5>
+                <p>在紧急情况下，可以使用以下按钮立即停止策略或清仓：</p>
+                <button class="btn btn-danger btn-lg me-2" onclick="emergencyStop()">
+                    🛑 停止所有策略
+                </button>
+                <button class="btn btn-warning btn-lg" onclick="emergencyLiquidate()">
+                    💰 一键清仓
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 主功能区 -->
+    <div class="row">
+        <!-- 左侧：持仓列表 -->
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header">
+                    <h5>当前持仓</h5>
+                </div>
+                <div class="card-body">
+                    {% if positions %}
+                        <table class="table table-sm">
+                            <thead>
+                                <tr>
+                                    <th>代码</th>
+                                    <th>数量</th>
+                                    <th>成本价</th>
+                                    <th>当前价</th>
+                                    <th>盈亏</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for position in positions %}
+                                <tr>
+                                    <td>{{ position.symbol }}</td>
+                                    <td>{{ position.quantity }}</td>
+                                    <td>¥{{ position.cost_price|floatformat:2 }}</td>
+                                    <td>¥{{ position.current_price|floatformat:2 }}</td>
+                                    <td class="{% if position.pnl >= 0 %}text-success{% else %}text-danger{% endif %}">
+                                        ¥{{ position.pnl|floatformat:2 }}
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    {% else %}
+                        <p class="text-muted">暂无持仓</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        
+        <!-- 右侧：最近交易 -->
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header">
+                    <h5>最近交易</h5>
+                </div>
+                <div class="card-body">
+                    {% if recent_trades %}
+                        <table class="table table-sm">
+                            <thead>
+                                <tr>
+                                    <th>时间</th>
+                                    <th>策略</th>
+                                    <th>方向</th>
+                                    <th>价格</th>
+                                    <th>数量</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for trade in recent_trades %}
+                                <tr>
+                                    <td>{{ trade.timestamp|date:"H:i:s" }}</td>
+                                    <td>{{ trade.strategy_name }}</td>
+                                    <td>
+                                        {% if trade.direction == 'BUY' %}
+                                            <span class="badge bg-success">买入</span>
+                                        {% else %}
+                                            <span class="badge bg-danger">卖出</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>¥{{ trade.price|floatformat:2 }}</td>
+                                    <td>{{ trade.quantity }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    {% else %}
+                        <p class="text-muted">暂无交易记录</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function emergencyStop() {
+    if (confirm('确定要停止所有策略吗？')) {
+        // TODO: 调用API停止策略
+        alert('策略已停止');
+    }
+}
+
+function emergencyLiquidate() {
+    if (confirm('⚠️ 警告：确定要一键清仓吗？这将卖出所有持仓！')) {
+        // TODO: 调用API清仓
+        alert('清仓指令已发送');
+    }
+}
+</script>
+{% endblock %}
+

@@ -57,14 +57,49 @@ def run_backtest(
     if data_type == 'daily':
         # 日K数据
         from apps.data_master.models import Candle
+        # 自动过滤未来日期，只使用历史数据
+        from datetime import date as date_type
+        today = date_type.today()
+        
+        # 如果结束日期是未来日期，自动调整为今天
+        if isinstance(end_date, date_type):
+            effective_end_date = min(end_date, today)
+            if end_date > today:
+                print(f'⚠️ 警告: 结束日期 {end_date} 是未来日期，已自动调整为今天 {today}')
+        else:
+            # end_date应该已经是date类型（在前面已经转换）
+            effective_end_date = end_date if end_date <= today else today
+            if end_date > today:
+                print(f'⚠️ 警告: 结束日期 {end_date} 是未来日期，已自动调整为今天 {today}')
+        
+        # 确保effective_end_date是date类型
+        if not isinstance(effective_end_date, date_type):
+            effective_end_date = today
+        
         candles = Candle.objects.filter(
             instrument=instrument,
             date__gte=start_date,
-            date__lte=end_date
+            date__lte=effective_end_date
         ).order_by('date')
         
-        if not candles.exists():
-            raise ValueError(f"No daily candle data found for {symbol} in range {start_date} to {end_date}")
+        # 调试信息：打印实际使用的日期范围
+        if candles.exists():
+            actual_start = candles.first().date
+            actual_end = candles.last().date
+            print(f'实际使用的数据范围: {actual_start} 到 {actual_end} (共 {candles.count()} 条)')
+        else:
+            # 获取标的的数据范围，提供更详细的错误信息
+            all_candles = Candle.objects.filter(instrument=instrument).order_by('date')
+            if all_candles.exists():
+                earliest = all_candles.first().date
+                latest = all_candles.last().date
+                raise ValueError(
+                    f"No daily candle data found for {symbol} in range {start_date} to {end_date}. "
+                    f"Available data range: {earliest} to {latest}. "
+                    f"Please adjust your date range."
+                )
+            else:
+                raise ValueError(f"No daily candle data found for {symbol}. Please sync data first.")
         
         # 转换为DataFrame
         data_list = []
@@ -198,7 +233,7 @@ def run_backtest(
     
     # 如果没有任何交易，打印调试信息
     if total_trades == 0:
-        print(f'警告: 策略 {strategy_name} 没有产生任何交易！')
+        print(f'\n⚠️ 警告: 策略 {strategy_name} 没有产生任何交易！')
         print(f'  - 初始资金: {initial_cash}')
         print(f'  - 最终资金: {final_value}')
         print(f'  - 数据点数: {len(df)}')
@@ -218,6 +253,40 @@ def run_backtest(
             if last_date > today:
                 print(f'  ⚠️ 警告: 数据包含未来日期！最后日期: {last_date}, 今天: {today}')
                 print(f'  ⚠️ 建议: 请使用历史日期范围进行回测，例如: 2022-01-01 到 2024-12-20')
+            
+            # 检查策略参数，判断数据是否足够
+            strategy_params_str = ', '.join([f'{k}={v}' for k, v in strategy_params.items()])
+            print(f'  - 策略参数: {strategy_params_str}')
+            
+            # 对于双均线策略，检查数据是否足够
+            if strategy_name == 'macross':
+                fast_period = strategy_params.get('fast_period', 5)
+                slow_period = strategy_params.get('slow_period', 20)
+                min_required = slow_period
+                print(f'  - 双均线策略需要至少 {min_required} 条数据（slow_period={slow_period}）')
+                if len(df) < min_required:
+                    print(f'  ❌ 数据不足！只有 {len(df)} 条，需要至少 {min_required} 条')
+                else:
+                    print(f'  ✅ 数据充足（{len(df)} >= {min_required}）')
+                    print(f'  💡 可能原因: 快线（{fast_period}）和慢线（{slow_period}）在数据范围内没有发生交叉')
+                    print(f'  💡 建议: 尝试更长的日期范围，或者调整参数范围')
+            
+            # 对于MACD策略
+            elif strategy_name == 'macd':
+                slow_period = strategy_params.get('slow_period', 26)
+                signal_period = strategy_params.get('signal_period', 9)
+                min_required = slow_period + signal_period
+                print(f'  - MACD策略需要至少 {min_required} 条数据（slow_period={slow_period} + signal_period={signal_period}）')
+                if len(df) < min_required:
+                    print(f'  ❌ 数据不足！只有 {len(df)} 条，需要至少 {min_required} 条')
+                else:
+                    print(f'  ✅ 数据充足（{len(df)} >= {min_required}）')
+                    print(f'  💡 可能原因: MACD线和信号线在数据范围内没有发生交叉')
+            
+            print(f'  💡 通用建议:')
+            print(f'     1. 确保日期范围有足够的历史数据（建议至少1年）')
+            print(f'     2. 检查策略参数是否合理')
+            print(f'     3. 某些策略在某些市场条件下可能不会产生交易信号（这是正常的）')
     
     # 计算收益率
     total_return = (final_value - initial_cash) / initial_cash * 100

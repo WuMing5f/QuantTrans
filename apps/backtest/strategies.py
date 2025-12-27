@@ -4,6 +4,7 @@
 """
 import backtrader as bt
 import numpy as np
+import pandas as pd
 
 
 class MACrossStrategy(bt.Strategy):
@@ -96,19 +97,30 @@ class MACrossStrategy(bt.Strategy):
         })
         
         # 跳过前几个周期，等待指标稳定
-        if len(self.data) < self.params.slow_period:
+        # CrossOver指标需要至少slow_period+1个数据点才能产生信号
+        if len(self.data) < self.params.slow_period + 1:
             return
         
         if self.order:
             return
         
+        # 检查CrossOver指标是否有有效值（不是NaN）
+        try:
+            crossover_value = self.crossover[0]
+            if pd.isna(crossover_value):
+                return
+        except (IndexError, TypeError):
+            return
+        
         if not self.position:
-            if self.crossover > 0:
-                self.log(f'买入信号: 快线={self.fast_ma[0]:.2f}, 慢线={self.slow_ma[0]:.2f}')
+            # 买入信号：快线上穿慢线（crossover > 0）
+            if crossover_value > 0:
+                self.log(f'买入信号: 快线={self.fast_ma[0]:.2f}, 慢线={self.slow_ma[0]:.2f}, crossover={crossover_value}')
                 self.order = self.buy()
         else:
-            if self.crossover < 0:
-                self.log(f'卖出信号: 快线={self.fast_ma[0]:.2f}, 慢线={self.slow_ma[0]:.2f}')
+            # 卖出信号：快线下穿慢线（crossover < 0）
+            if crossover_value < 0:
+                self.log(f'卖出信号: 快线={self.fast_ma[0]:.2f}, 慢线={self.slow_ma[0]:.2f}, crossover={crossover_value}')
                 self.order = self.sell()
     
     def stop(self):
@@ -193,16 +205,32 @@ class MACDStrategy(bt.Strategy):
             'return_pct': ((current_value - self.broker.startingcash) / self.broker.startingcash) * 100
         })
         
+        # 跳过前几个周期，等待MACD指标稳定
+        # MACD需要至少 slow_period + signal_period 个数据点
+        min_period = self.params.slow_period + self.params.signal_period
+        if len(self.data) < min_period + 1:  # +1 因为CrossOver需要额外一个数据点
+            return
+        
         if self.order:
             return
         
+        # 检查CrossOver指标是否有有效值（不是NaN）
+        try:
+            crossover_value = self.crossover[0]
+            if pd.isna(crossover_value):
+                return
+        except (IndexError, TypeError):
+            return
+        
         if not self.position:
-            if self.crossover > 0:
-                self.log(f'买入信号: MACD={self.macd.macd[0]:.2f}, Signal={self.macd.signal[0]:.2f}')
+            # 买入信号：MACD线上穿信号线（crossover > 0）
+            if crossover_value > 0:
+                self.log(f'买入信号: MACD={self.macd.macd[0]:.2f}, Signal={self.macd.signal[0]:.2f}, crossover={crossover_value}')
                 self.order = self.buy()
         else:
-            if self.crossover < 0:
-                self.log(f'卖出信号: MACD={self.macd.macd[0]:.2f}, Signal={self.macd.signal[0]:.2f}')
+            # 卖出信号：MACD线下穿信号线（crossover < 0）
+            if crossover_value < 0:
+                self.log(f'卖出信号: MACD={self.macd.macd[0]:.2f}, Signal={self.macd.signal[0]:.2f}, crossover={crossover_value}')
                 self.order = self.sell()
     
     def stop(self):
@@ -279,16 +307,29 @@ class RSIStrategy(bt.Strategy):
             'return_pct': ((current_value - self.broker.startingcash) / self.broker.startingcash) * 100
         })
         
+        # 跳过前几个周期，等待RSI指标稳定
+        # RSI需要至少period个数据点
+        if len(self.data) < self.params.period + 1:
+            return
+        
         if self.order:
             return
         
+        # 检查RSI指标是否有有效值（不是NaN）
+        try:
+            rsi_value = self.rsi[0]
+            if pd.isna(rsi_value):
+                return
+        except (IndexError, TypeError):
+            return
+        
         if not self.position:
-            if self.rsi[0] < self.params.oversold:
-                self.log(f'买入信号: RSI={self.rsi[0]:.2f} < {self.params.oversold}')
+            if rsi_value < self.params.oversold:
+                self.log(f'买入信号: RSI={rsi_value:.2f} < {self.params.oversold}')
                 self.order = self.buy()
         else:
-            if self.rsi[0] > self.params.overbought:
-                self.log(f'卖出信号: RSI={self.rsi[0]:.2f} > {self.params.overbought}')
+            if rsi_value > self.params.overbought:
+                self.log(f'卖出信号: RSI={rsi_value:.2f} > {self.params.overbought}')
                 self.order = self.sell()
     
     def stop(self):
@@ -588,6 +629,8 @@ class VCPStrategy(bt.Strategy):
     def __init__(self):
         # 计算ATR（平均真实波幅）来衡量波动率
         self.atr = bt.indicators.ATR(self.data, period=self.params.lookback)
+        # 计算ATR的移动平均，用于比较当前波动率与历史平均波动率
+        self.atr_sma = bt.indicators.SMA(self.atr, period=self.params.lookback)
         self.sma_volume = bt.indicators.SMA(self.data.volume, period=self.params.lookback)
         
         # 记录最高价用于判断突破
@@ -644,20 +687,34 @@ class VCPStrategy(bt.Strategy):
             return
         
         # 需要足够的历史数据
+        # ATR 需要至少 lookback 个数据点才能计算
+        # 我们需要 lookback * 2 个数据点来比较当前和历史 ATR
         if len(self.data) < self.params.lookback * 2:
             return
         
-        current_price = self.data.close[0]
-        current_atr = self.atr[0]
-        current_volume = self.data.volume[0]
-        avg_volume = self.sma_volume[0]
-        recent_high = self.highest[0]
+        # 检查指标是否有有效值（避免访问未计算的指标值）
+        try:
+            # 获取指标值并转换为 Python 数值类型，避免 LineOwnOperation 对象
+            current_price = float(self.data.close[0])
+            current_atr = float(self.atr[0])
+            current_volume = float(self.data.volume[0])
+            avg_volume = float(self.sma_volume[0])
+            recent_high = float(self.highest[0])
+            avg_atr = float(self.atr_sma[0])  # ATR的移动平均，代表历史平均波动率
+            
+            # 检查是否有 NaN 或无效值
+            if (pd.isna(current_atr) or pd.isna(avg_volume) or pd.isna(avg_atr) or
+                current_atr <= 0 or avg_volume <= 0 or avg_atr <= 0):
+                return
+        except (IndexError, TypeError, AttributeError, ValueError):
+            return
         
-        # 计算波动率收缩：当前ATR小于历史ATR的收缩比例
-        if len(self.atr) >= self.params.lookback * 2:
-            historical_atr = self.atr[-self.params.lookback]
-            volatility_contracted = current_atr < (historical_atr * self.params.contraction_ratio) if historical_atr > 0 else False
-        else:
+        # 计算波动率收缩：当前ATR小于历史平均ATR的收缩比例
+        # 使用 ATR 的移动平均作为历史基准，这样更安全且符合回测逻辑
+        try:
+            # 当前波动率小于历史平均波动率的收缩比例
+            volatility_contracted = current_atr < (avg_atr * self.params.contraction_ratio)
+        except (IndexError, TypeError, AttributeError):
             volatility_contracted = False
         
         # 成交量收缩：当前成交量小于平均成交量的比例
@@ -673,13 +730,27 @@ class VCPStrategy(bt.Strategy):
                 self.order = self.buy()
         else:
             # 卖出条件：价格跌破买入价的8%或跌破近期低点
-            if len(self.data) >= self.params.lookback:
-                recent_low = bt.indicators.Lowest(self.data.low, period=self.params.lookback)[0]
-                stop_loss = current_price < (self.position.price * 0.92)  # 8%止损
-                break_down = current_price < (recent_low * 0.98)
-                
-                if stop_loss or break_down:
-                    self.log(f'VCP卖出信号: 价格={current_price:.2f}, 买入价={self.position.price:.2f}')
+            try:
+                if len(self.data) >= self.params.lookback:
+                    recent_low = bt.indicators.Lowest(self.data.low, period=self.params.lookback)[0]
+                    # 不要直接使用 if recent_low，而是检查数值是否有效
+                    # 在 Backtrader 中，直接对指标值进行布尔判断会触发 __bool__ 错误
+                    if not pd.isna(recent_low) and recent_low > 0:
+                        stop_loss = current_price < (self.position.price * 0.92)  # 8%止损
+                        break_down = current_price < (recent_low * 0.98)
+                        
+                        if stop_loss or break_down:
+                            self.log(f'VCP卖出信号: 价格={current_price:.2f}, 买入价={self.position.price:.2f}')
+                            self.order = self.sell()
+                    else:
+                        # 如果 recent_low 无效，只使用止损
+                        if current_price < (self.position.price * 0.92):
+                            self.log(f'VCP止损卖出: 价格={current_price:.2f}, 买入价={self.position.price:.2f}')
+                            self.order = self.sell()
+            except (IndexError, TypeError, AttributeError):
+                # 如果计算失败，只使用止损
+                if current_price < (self.position.price * 0.92):
+                    self.log(f'VCP止损卖出: 价格={current_price:.2f}, 买入价={self.position.price:.2f}')
                     self.order = self.sell()
     
     def stop(self):
@@ -714,19 +785,40 @@ class CandlestickStrategy(bt.Strategy):
     
     def detect_pattern(self):
         """检测蜡烛图形态"""
-        if len(self.data) < 3:
+        # 需要至少2个数据点才能检测形态
+        if len(self.data) < 2:
             return None
         
-        # 获取当前和前一日的OHLC
-        open0 = self.data.open[0]
-        close0 = self.data.close[0]
-        high0 = self.data.high[0]
-        low0 = self.data.low[0]
-        
-        open1 = self.data.open[-1]
-        close1 = self.data.close[-1]
-        high1 = self.data.high[-1]
-        low1 = self.data.low[-1]
+        try:
+            # 获取当前和前一日的OHLC
+            # 在Backtrader中，[0]是当前数据点，[-1]或(ago=1)是前一个数据点
+            open0 = self.data.open[0]
+            close0 = self.data.close[0]
+            high0 = self.data.high[0]
+            low0 = self.data.low[0]
+            
+            # 安全访问前一日数据 - 使用负索引或 ago 参数
+            try:
+                # 优先使用 ago 参数（更安全）
+                open1 = self.data.open(-1)
+                close1 = self.data.close(-1)
+                high1 = self.data.high(-1)
+                low1 = self.data.low(-1)
+            except (IndexError, TypeError):
+                # 如果 ago 失败，尝试使用负索引
+                try:
+                    if len(self.data) >= 2:
+                        open1 = self.data.open[-1]
+                        close1 = self.data.close[-1]
+                        high1 = self.data.high[-1]
+                        low1 = self.data.low[-1]
+                    else:
+                        return None
+                except (IndexError, TypeError):
+                    # 如果都无法访问，返回None
+                    return None
+        except (IndexError, TypeError, AttributeError):
+            return None
         
         body0 = abs(close0 - open0)
         body1 = abs(close1 - open1)
@@ -823,11 +915,33 @@ class CandlestickStrategy(bt.Strategy):
             # 买入信号：看涨形态
             if pattern and pattern in ['bullish_hammer', 'bullish_engulfing', 'doji']:
                 if self.params.pattern_type == 'all' or pattern.startswith(self.params.pattern_type):
-                    # 等待确认
-                    if len(self.data) >= self.params.confirmation_period:
-                        if self.data.close[0] > self.data.close[-self.params.confirmation_period]:
-                            self.log(f'蜡烛图买入信号: {pattern}, 价格={self.data.close[0]:.2f}')
-                            self.order = self.buy()
+                    # 等待确认：需要足够的数据点
+                    try:
+                        # 确保有足够的历史数据
+                        if len(self.data) > self.params.confirmation_period:
+                            # 在 Backtrader 中，使用 ago 参数访问历史数据
+                            # ago=1 表示前一个数据点，ago=2 表示前两个数据点
+                            try:
+                                # 使用 ago 参数访问 confirmation_period 个周期前的数据
+                                prev_close = self.data.close(-self.params.confirmation_period)
+                            except (IndexError, TypeError):
+                                # 如果 ago 参数失败，尝试使用负索引
+                                # 但需要确保数据足够
+                                if len(self.data) > self.params.confirmation_period:
+                                    try:
+                                        prev_close = self.data.close[-self.params.confirmation_period]
+                                    except (IndexError, TypeError):
+                                        return  # 数据不足，跳过
+                                else:
+                                    return  # 数据不足，跳过
+                            
+                            # 比较当前价格和历史价格
+                            if self.data.close[0] > prev_close:
+                                self.log(f'蜡烛图买入信号: {pattern}, 价格={self.data.close[0]:.2f}')
+                                self.order = self.buy()
+                    except (IndexError, TypeError, AttributeError):
+                        # 如果访问历史数据失败，跳过本次交易
+                        pass
         else:
             # 卖出信号：看跌形态或止损
             if pattern and pattern in ['bearish_hammer', 'bearish_engulfing']:
@@ -938,9 +1052,16 @@ class SwingTradingStrategy(bt.Strategy):
             if uptrend:
                 swing_low_price = self.swing_low[0]
                 # 价格从波段高点回调一定比例
-                if len(self.data) >= self.params.swing_period:
-                    recent_high = max([self.data.high[-i] for i in range(1, self.params.swing_period + 1)])
-                    pullback = (recent_high - current_price) / recent_high if recent_high > 0 else 0
+                try:
+                    if len(self.data) >= self.params.swing_period + 1:
+                        # 使用正索引访问历史数据，确保索引有效
+                        max_idx = min(self.params.swing_period + 1, len(self.data))
+                        recent_high = max([self.data.high[i] for i in range(1, max_idx) if i < len(self.data)])
+                        pullback = (recent_high - current_price) / recent_high if recent_high > 0 else 0
+                    else:
+                        pullback = 0
+                except (IndexError, TypeError, ValueError):
+                    pullback = 0
                     
                     # 价格接近波段低点或回调达到阈值
                     if (current_price <= swing_low_price * 1.02 or 

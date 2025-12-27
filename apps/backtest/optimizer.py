@@ -11,61 +11,138 @@ import pandas as pd
 
 
 # 定义每个策略的参数网格（限制参数范围，避免组合爆炸）
+# 注意：参数组合数量 = 各参数值数量的乘积，建议控制在100以内
 STRATEGY_PARAM_GRIDS = {
     'macross': {
-        'fast_period': [5, 10, 15],
-        'slow_period': [20, 30, 40],
+        'fast_period': [5, 10, 15, 20],
+        'slow_period': [20, 30, 40, 60],
     },
     'macd': {
-        'fast_period': [12],
-        'slow_period': [26],
-        'signal_period': [9],
+        'fast_period': [10, 12, 15],
+        'slow_period': [20, 26, 30],
+        'signal_period': [7, 9, 12],
     },
     'rsi': {
-        'period': [14],
-        'oversold': [30],
-        'overbought': [70],
+        'period': [10, 14, 20],
+        'oversold': [25, 30, 35],
+        'overbought': [65, 70, 75],
     },
     'bollinger': {
-        'period': [20],
-        'devfactor': [2.0, 2.5],
+        'period': [15, 20, 25],
+        'devfactor': [1.5, 2.0, 2.5],
     },
     'triple_ma': {
-        'fast_period': [5],
-        'mid_period': [10],
-        'slow_period': [20],
+        'fast_period': [3, 5, 8],
+        'mid_period': [8, 10, 15],
+        'slow_period': [15, 20, 30],
     },
     'mean_reversion': {
-        'period': [20],
-        'threshold': [0.02, 0.03],
+        'period': [15, 20, 25],
+        'threshold': [0.015, 0.02, 0.025, 0.03],
     },
     'vcp': {
-        'lookback': [20],
-        'contraction_ratio': [0.7],
-        'volume_ratio': [0.8],
-        'breakout_threshold': [1.02],
+        'lookback': [15, 20, 25],
+        'contraction_ratio': [0.6, 0.7, 0.8],
+        'volume_ratio': [0.7, 0.8, 0.9],
+        'breakout_threshold': [1.01, 1.02, 1.03],
     },
     'candlestick': {
-        'pattern_type': ['all'],
-        'confirmation_period': [2],
-        'min_body_ratio': [0.3],
-        'min_shadow_ratio': [2.0],
+        'pattern_type': ['all', 'hammer', 'engulfing'],
+        'confirmation_period': [1, 2, 3],
+        'min_body_ratio': [0.2, 0.3, 0.4],
+        'min_shadow_ratio': [1.5, 2.0, 2.5],
     },
     'swing': {
-        'trend_period': [20],
-        'swing_period': [10],
-        'pullback_ratio': [0.05],
-        'profit_target': [0.10],
-        'stop_loss': [0.05],
+        'trend_period': [15, 20, 25],
+        'swing_period': [8, 10, 12],
+        'pullback_ratio': [0.03, 0.05, 0.07],
+        'profit_target': [0.08, 0.10, 0.12],
+        'stop_loss': [0.03, 0.05, 0.07],
     },
     'trend_following': {
-        'fast_period': [10],
-        'slow_period': [30],
-        'adx_period': [14],
-        'adx_threshold': [25],
-        'trailing_stop': [0.03],
+        'fast_period': [8, 10, 12],
+        'slow_period': [25, 30, 35],
+        'adx_period': [12, 14, 16],
+        'adx_threshold': [20, 25, 30],
+        'trailing_stop': [0.02, 0.03, 0.04],
     },
 }
+
+
+def optimize_single_strategy(
+    symbol: str,
+    strategy_name: str,
+    start_date: str,
+    end_date: str,
+    initial_cash: float = 100000.0,
+    commission: float = 0.001,
+    data_type: str = 'daily',
+) -> Dict[str, Any]:
+    """
+    对单个标的的单个策略进行参数优化
+    
+    Args:
+        symbol: 股票代码
+        strategy_name: 策略名称
+        start_date: 开始日期
+        end_date: 结束日期
+        initial_cash: 初始资金
+        commission: 手续费率
+        data_type: 数据类型
+        
+    Returns:
+        包含所有参数组合的回测结果和最佳参数
+    """
+    # 生成所有参数组合
+    param_combinations = generate_param_combinations(strategy_name)
+    
+    print(f'\n标的 {symbol}, 策略 {strategy_name}')
+    print(f'日期范围: {start_date} 到 {end_date}')
+    print(f'共 {len(param_combinations)} 个参数组合需要测试')
+    
+    results = []
+    for i, params in enumerate(param_combinations, 1):
+        try:
+            print(f'[{i}/{len(param_combinations)}] 测试参数: {params}')
+            
+            result = run_backtest(
+                symbol=symbol,
+                strategy_name=strategy_name,
+                start_date=start_date,
+                end_date=end_date,
+                data_type=data_type,
+                initial_cash=initial_cash,
+                commission=commission,
+                **params
+            )
+            
+            # 添加参数信息
+            result['strategy_params'] = params
+            results.append(result)
+            
+        except Exception as e:
+            print(f'参数 {params} 回测失败: {str(e)}')
+            continue
+    
+    # 找出最佳参数（按总收益率）
+    best_by_return = find_best_strategy(results, 'total_return_pct')
+    
+    # 找出最佳参数（按夏普比率）
+    best_by_sharpe = find_best_strategy(results, 'sharpe_ratio')
+    
+    # 找出最佳参数（按年化收益率）
+    best_by_annual = find_best_strategy(results, 'annual_return_pct')
+    
+    return {
+        'symbol': symbol,
+        'strategy_name': strategy_name,
+        'all_results': results,
+        'total_combinations': len(param_combinations),
+        'valid_results': len(results),
+        'best_by_return': best_by_return,
+        'best_by_sharpe': best_by_sharpe,
+        'best_by_annual': best_by_annual,
+    }
 
 
 def generate_param_combinations(strategy_name: str) -> List[Dict[str, Any]]:
@@ -158,10 +235,22 @@ def batch_backtest_all_strategies(
                 result['strategy_params'] = params
                 result['symbol'] = symbol
                 
+                # 如果没有任何交易，添加警告信息
+                if result.get('total_trades', 0) == 0:
+                    print(f'  ⚠️ 警告: 此参数组合没有产生任何交易')
+                    print(f'     数据点数: {result.get("data_points", 0)}')
+                    # 检查是否是数据不足的问题
+                    if result.get('data_points', 0) < 50:
+                        print(f'     💡 数据可能不足，建议使用更长的日期范围')
+                
                 results.append(result)
                 
             except Exception as e:
-                print(f'策略 {strategy_name} 参数 {params} 回测失败: {str(e)}')
+                error_msg = str(e)
+                print(f'策略 {strategy_name} 参数 {params} 回测失败: {error_msg}')
+                # 如果是数据不足的错误，提供更详细的提示
+                if 'No daily candle data' in error_msg or 'No data found' in error_msg:
+                    print(f'  💡 提示: 请检查日期范围，确保有足够的历史数据')
                 continue
     
     return results

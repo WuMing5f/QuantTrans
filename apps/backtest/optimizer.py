@@ -66,6 +66,13 @@ STRATEGY_PARAM_GRIDS = {
         'adx_threshold': [20, 25, 30],
         'trailing_stop': [0.02, 0.03, 0.04],
     },
+    'pyramid_add': {
+        'initial_position_size': [0.03, 0.05, 0.07],  # 3%, 5%, 7%初始仓位
+        'stop_loss_pct': [0.015, 0.02, 0.025],  # 1.5%, 2%, 2.5%止损
+        'add_position_threshold': [0.015, 0.02, 0.025],  # 1.5%, 2%, 2.5%加仓阈值
+        'ma_period': [15, 20, 25],  # 均线周期
+        'high_open_threshold': [0.005, 0.01, 0.015],  # 0.5%, 1%, 1.5%高开阈值
+    },
 }
 
 

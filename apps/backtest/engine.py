@@ -291,6 +291,19 @@ def run_backtest(
     # 计算收益率
     total_return = (final_value - initial_cash) / initial_cash * 100
     
+    # 准备K线数据（用于图表展示）
+    price_data = []
+    for idx, row in df.iterrows():
+        date_str = idx.strftime('%Y-%m-%d') if hasattr(idx, 'strftime') else str(idx)
+        price_data.append({
+            'date': date_str,
+            'open': float(row['open']),
+            'high': float(row['high']),
+            'low': float(row['low']),
+            'close': float(row['close']),
+            'volume': int(row['volume']) if 'volume' in row else 0,
+        })
+    
     # 获取收益曲线数据和交易时点
     equity_curve = []
     trade_points = []
@@ -365,6 +378,7 @@ def run_backtest(
         'data_points': len(df),
         'equity_curve': equity_curve,  # 收益曲线数据
         'trade_points': trade_points,  # 交易时点数据（买入/卖出标记）
+        'price_data': price_data,  # K线数据（用于展示基金净值变化）
         'total_trades': total_trades,  # 总交易次数
         'won_trades': won_trades,  # 盈利交易次数
         'lost_trades': lost_trades,  # 亏损交易次数

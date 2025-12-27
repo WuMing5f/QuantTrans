@@ -537,28 +537,63 @@
                 const minDateObj = new Date(minDate);
                 minDateObj.setHours(0, 0, 0, 0);
                 
+                console.log('日期过滤检查:', {
+                    today: today.toISOString().split('T')[0],
+                    maxDateObj: maxDateObj.toISOString().split('T')[0],
+                    minDateObj: minDateObj.toISOString().split('T')[0],
+                    isMaxDateFuture: maxDateObj > today,
+                    todayTime: today.getTime(),
+                    maxDateObjTime: maxDateObj.getTime()
+                });
+                
                 // 如果最大日期是未来日期，使用今天
-                const effectiveMaxDate = maxDateObj > today ? today : maxDateObj;
+                // 注意：使用getTime()进行精确比较，避免时区问题
+                let effectiveMaxDate = maxDateObj.getTime() > today.getTime() ? today : maxDateObj;
+                
+                // 再次验证：确保结束日期不超过今天（双重保险）
+                if (effectiveMaxDate.getTime() > today.getTime()) {
+                    console.warn('⚠️ 警告: 有效最大日期仍然大于今天，强制使用今天');
+                    effectiveMaxDate = today;
+                }
+                
+                console.log('有效最大日期:', effectiveMaxDate.toISOString().split('T')[0]);
                 
                 // 计算合适的日期范围（使用数据的80%范围，留一些余量）
-                const totalDays = (effectiveMaxDate - minDateObj) / (1000 * 60 * 60 * 24);
+                const totalDays = (effectiveMaxDate.getTime() - minDateObj.getTime()) / (1000 * 60 * 60 * 24);
+                
+                console.log('日期范围计算:', {
+                    totalDays: totalDays,
+                    totalDaysRounded: Math.round(totalDays),
+                    use80Percent: totalDays > 90
+                });
                 
                 let finalStartDate, finalEndDate;
                 
-                // 如果数据范围足够大（超过90天），使用80%的范围
-                if (totalDays > 90) {
-                    const rangeDays = Math.floor(totalDays * 0.8);
-                    const adjustedStartDate = new Date(effectiveMaxDate);
-                    adjustedStartDate.setDate(adjustedStartDate.getDate() - rangeDays);
-                    
-                    // 确保开始日期不小于最小日期
-                    finalStartDate = adjustedStartDate < minDateObj ? minDateObj : adjustedStartDate;
-                    finalEndDate = effectiveMaxDate;
-                } else {
+                // 日期范围选择逻辑说明:
+                // 1. 如果数据范围较小（<=90天），使用全部范围
+                // 2. 如果数据范围较大（>90天），使用全部范围（不再限制为80%）
+                // 原因：用户希望使用所有可用数据进行回测，而不是只使用部分数据
+                if (totalDays <= 90) {
                     // 如果数据范围较小，使用全部范围
                     finalStartDate = minDateObj;
                     finalEndDate = effectiveMaxDate;
+                    console.log('使用全部范围（数据范围较小，<=90天）');
+                } else {
+                    // 如果数据范围较大，也使用全部范围（不再限制为80%）
+                    finalStartDate = minDateObj;
+                    finalEndDate = effectiveMaxDate;
+                    console.log('使用全部范围（数据范围较大，>90天，使用全部数据）');
+                    console.log('日期范围:', {
+                        totalDays: totalDays,
+                        startDate: finalStartDate.toISOString().split('T')[0],
+                        endDate: finalEndDate.toISOString().split('T')[0]
+                    });
                 }
+                
+                console.log('最终日期对象:', {
+                    finalStartDate: finalStartDate.toISOString().split('T')[0],
+                    finalEndDate: finalEndDate.toISOString().split('T')[0]
+                });
                 
                 // 设置日期值 - 使用YYYY-MM-DD格式
                 const startDateStr = finalStartDate.getFullYear() + '-' + 
@@ -614,9 +649,20 @@
                     startDateInput.defaultValue = startDateStr;
                     console.log('  ✓ 方法3: defaultValue → 当前value:', startDateInput.value);
                     
+                    // 方法4: 使用setProperty (某些浏览器需要)
+                    try {
+                        startDateInput.style.setProperty('--value', startDateStr);
+                    } catch(e) {}
+                    
                     // 触发事件
                     startDateInput.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
                     startDateInput.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+                    
+                    // 强制刷新显示（某些浏览器需要）
+                    const temp = startDateInput.style.display;
+                    startDateInput.style.display = 'none';
+                    startDateInput.offsetHeight; // 触发重排
+                    startDateInput.style.display = temp;
                     
                     console.log('  设置后 - 开始日期输入框:');
                     console.log('    value属性:', startDateInput.value);
@@ -646,9 +692,20 @@
                     endDateInput.defaultValue = endDateStr;
                     console.log('  ✓ 方法3: defaultValue → 当前value:', endDateInput.value);
                     
+                    // 方法4: 使用setProperty (某些浏览器需要)
+                    try {
+                        endDateInput.style.setProperty('--value', endDateStr);
+                    } catch(e) {}
+                    
                     // 触发事件
                     endDateInput.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
                     endDateInput.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+                    
+                    // 强制刷新显示（某些浏览器需要）
+                    const temp2 = endDateInput.style.display;
+                    endDateInput.style.display = 'none';
+                    endDateInput.offsetHeight; // 触发重排
+                    endDateInput.style.display = temp2;
                     
                     console.log('  设置后 - 结束日期输入框:');
                     console.log('    value属性:', endDateInput.value);
@@ -682,13 +739,43 @@
                         console.warn('  ⚠️ 开始日期设置失败，尝试再次设置...');
                         startDateInput.value = startDateStr;
                         startDateInput.setAttribute('value', startDateStr);
+                        // 强制刷新
+                        const temp = startDateInput.style.display;
+                        startDateInput.style.display = 'none';
+                        startDateInput.offsetHeight;
+                        startDateInput.style.display = temp;
                         console.log('    重试后value:', startDateInput.value);
                     }
                     if (endDateInput && endVal !== endDateStr) {
                         console.warn('  ⚠️ 结束日期设置失败，尝试再次设置...');
                         endDateInput.value = endDateStr;
                         endDateInput.setAttribute('value', endDateStr);
+                        // 强制刷新
+                        const temp2 = endDateInput.style.display;
+                        endDateInput.style.display = 'none';
+                        endDateInput.offsetHeight;
+                        endDateInput.style.display = temp2;
                         console.log('    重试后value:', endDateInput.value);
+                    }
+                    
+                    // 最终验证：如果还是失败，直接操作DOM
+                    if (startDateInput && startDateInput.value !== startDateStr) {
+                        console.error('  ❌ 开始日期设置仍然失败，尝试直接操作DOM...');
+                        startDateInput.setAttribute('value', startDateStr);
+                        startDateInput.value = startDateStr;
+                        // 尝试使用原生方法
+                        if (startDateInput.setValue) {
+                            startDateInput.setValue(startDateStr);
+                        }
+                    }
+                    if (endDateInput && endDateInput.value !== endDateStr) {
+                        console.error('  ❌ 结束日期设置仍然失败，尝试直接操作DOM...');
+                        endDateInput.setAttribute('value', endDateStr);
+                        endDateInput.value = endDateStr;
+                        // 尝试使用原生方法
+                        if (endDateInput.setValue) {
+                            endDateInput.setValue(endDateStr);
+                        }
                     }
                     console.log('========================================');
                 }, 200);
@@ -1375,7 +1462,8 @@
                     initEquityChart(
                         data.best_chart_data.equity_curve, 
                         data.best_chart_data.initial_cash, 
-                        tradePoints
+                        tradePoints,
+                        data.best_chart_data.price_data || []
                     );
                 }, 200);
             } else {
@@ -1503,7 +1591,7 @@
                         trade_points_length: data.trade_points?.length,
                         trade_points: data.trade_points
                     });
-                    initEquityChart(data.equity_curve, data.initial_cash, data.trade_points || []);
+                    initEquityChart(data.equity_curve, data.initial_cash, data.trade_points || [], data.price_data || []);
                 }, 200);
             } else {
                 console.warn('No equity curve data available');
@@ -1518,7 +1606,7 @@
         // 在全局作用域声明图表实例变量
         var equityChart = null;  // 保存图表实例，以便后续重用
         
-        function initEquityChart(equityData, initialCash, tradePoints = []) {
+        function initEquityChart(equityData, initialCash, tradePoints = [], priceData = []) {
             console.log('initEquityChart called with:', {
                 equityDataLength: equityData?.length,
                 initialCash: initialCash,
@@ -1600,6 +1688,18 @@
                 return parseFloat(d.return_pct || d[2] || 0);
             });
             
+            // 处理K线数据（如果存在）
+            let klineData = [];
+            if (priceData && priceData.length > 0) {
+                // 准备K线数据格式：ECharts candlestick需要 [开盘, 收盘, 最低, 最高]
+                // 注意：ECharts的candlestick数据格式是 [open, close, low, high]
+                klineData = priceData.map(p => {
+                    return [p.open, p.close, p.low, p.high];
+                });
+                console.log('K线数据准备完成，共', klineData.length, '条');
+                console.log('K线数据示例:', klineData.slice(0, 3));
+            }
+            
             // 处理交易时点数据（如果存在）
             // 注意：这里需要在调用initEquityChart时传递tradePoints参数
             
@@ -1653,19 +1753,28 @@
                     });
                     
                     if (pointIndex >= 0 && pointIndex < values.length) {
+                        // 对于K线图，需要找到对应的价格（使用收盘价）
+                        let priceForKline = values[pointIndex]; // 默认使用资产价值
+                        if (klineData.length > 0 && pointIndex < klineData.length) {
+                            // 如果有K线数据，使用收盘价
+                            priceForKline = klineData[pointIndex][1]; // [open, close, low, high]中的close
+                        }
+                        
+                        // markPoint的coord格式：对于category类型的xAxis，可以使用索引或日期字符串
+                        // 使用日期字符串更可靠，因为ECharts会自动匹配
                         const pointData = {
                             name: tp.type === 'buy' ? '买入' : '卖出',
-                            coord: [dates[pointIndex], values[pointIndex]],
+                            coord: [dates[pointIndex], priceForKline], // 使用日期字符串和价格
                             value: `${tp.type === 'buy' ? '买入' : '卖出'}\n价格: ¥${(tp.price || 0).toFixed(2)}\n资产: ¥${(tp.value || 0).toFixed(2)}`,
                             itemStyle: { color: tp.type === 'buy' ? '#4CAF50' : '#ef5350' }
                         };
                         
                         if (tp.type === 'buy') {
                             buyPoints.push(pointData);
-                            console.log('✓ Added buy point:', dates[pointIndex], values[pointIndex]);
+                            console.log('✓ Added buy point:', dates[pointIndex], priceForKline);
                         } else if (tp.type === 'sell') {
                             sellPoints.push(pointData);
-                            console.log('✓ Added sell point:', dates[pointIndex], values[pointIndex]);
+                            console.log('✓ Added sell point:', dates[pointIndex], priceForKline);
                         }
                     } else {
                         console.warn('✗ Trade point date not found in chart dates:', {
@@ -1705,25 +1814,45 @@
                     trigger: 'axis',
                     axisPointer: { type: 'cross' },
                     formatter: function(params) {
+                        if (!params || params.length === 0) return '';
                         let result = params[0].name + '<br/>';
                         params.forEach(param => {
-                            if (param.seriesName === '资产价值') {
-                                result += `${param.seriesName}: ¥${param.value.toLocaleString('zh-CN', {minimumFractionDigits: 2})}<br/>`;
+                            if (!param || param.value === null || param.value === undefined) return;
+                            
+                            if (param.seriesName === '基金净值') {
+                                // K线图tooltip：显示OHLC
+                                if (Array.isArray(param.value) && param.value.length === 4) {
+                                    const [open, close, low, high] = param.value;
+                                    result += `${param.seriesName}:<br/>`;
+                                    result += `  开盘: ¥${Number(open).toFixed(2)}<br/>`;
+                                    result += `  收盘: ¥${Number(close).toFixed(2)}<br/>`;
+                                    result += `  最低: ¥${Number(low).toFixed(2)}<br/>`;
+                                    result += `  最高: ¥${Number(high).toFixed(2)}<br/>`;
+                                }
+                            } else if (param.seriesName === '资产价值') {
+                                const val = Number(param.value);
+                                if (!isNaN(val)) {
+                                    result += `${param.seriesName}: ¥${val.toLocaleString('zh-CN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}<br/>`;
+                                }
                             } else {
-                                result += `${param.seriesName}: ${param.value >= 0 ? '+' : ''}${param.value.toFixed(2)}%<br/>`;
+                                const val = Number(param.value);
+                                if (!isNaN(val)) {
+                                    result += `${param.seriesName}: ${val >= 0 ? '+' : ''}${val.toFixed(2)}%<br/>`;
+                                }
                             }
                         });
                         return result;
                     }
                 },
                 legend: {
-                    data: ['资产价值', '收益率'],
+                    data: klineData.length > 0 ? ['基金净值', '资产价值', '收益率'] : ['资产价值', '收益率'],
                     top: 30,
                     textStyle: { color: '#fff' }
                 },
                 grid: [
-                    { left: '10%', right: '8%', top: '15%', height: '60%' },
-                    { left: '10%', right: '8%', top: '80%', height: '15%' }
+                    { left: '10%', right: '8%', top: '15%', height: '45%' },  // K线图区域
+                    { left: '10%', right: '8%', top: '65%', height: '20%' },  // 资产价值区域
+                    { left: '10%', right: '8%', top: '90%', height: '10%' }   // 收益率区域
                 ],
                 xAxis: [
                     {
@@ -1732,6 +1861,20 @@
                         scale: true,
                         boundaryGap: false,
                         axisLine: { onZero: false },
+                        splitLine: { show: false },
+                        axisLabel: { 
+                            color: '#999',
+                            show: false  // K线图不显示X轴标签，避免重叠
+                        }
+                    },
+                    {
+                        type: 'category',
+                        gridIndex: 1,
+                        data: dates,
+                        scale: true,
+                        boundaryGap: false,
+                        axisLine: { onZero: false },
+                        axisTick: { show: false },
                         splitLine: { show: false },
                         axisLabel: { 
                             color: '#999',
@@ -1752,7 +1895,7 @@
                     },
                     {
                         type: 'category',
-                        gridIndex: 1,
+                        gridIndex: 2,
                         data: dates,
                         scale: true,
                         boundaryGap: false,
@@ -1767,7 +1910,20 @@
                 yAxis: [
                     {
                         type: 'value',
+                        name: '基金净值 (¥)',
+                        scale: true,
+                        splitArea: { show: true },
+                        axisLabel: { 
+                            color: '#999',
+                            formatter: function(value) {
+                                return value.toFixed(2);
+                            }
+                        }
+                    },
+                    {
+                        type: 'value',
                         name: '资产价值 (¥)',
+                        gridIndex: 1,
                         scale: true,
                         splitArea: { show: true },
                         axisLabel: { 
@@ -1780,7 +1936,7 @@
                     {
                         type: 'value',
                         name: '收益率 (%)',
-                        gridIndex: 1,
+                        gridIndex: 2,
                         scale: true,
                         splitNumber: 2,
                         axisLabel: { 
@@ -1795,13 +1951,13 @@
                 dataZoom: [
                     {
                         type: 'inside',
-                        xAxisIndex: [0, 1],
+                        xAxisIndex: [0, 1, 2],
                         start: 0,
                         end: 100
                     },
                     {
                         show: true,
-                        xAxisIndex: [0, 1],
+                        xAxisIndex: [0, 1, 2],
                         type: 'slider',
                         top: '95%',
                         start: 0,
@@ -1810,9 +1966,58 @@
                     }
                 ],
                 series: [
+                    // K线图（基金净值）- 如果有K线数据
+                    ...(klineData.length > 0 ? [{
+                        name: '基金净值',
+                        type: 'candlestick',
+                        data: klineData,  // 格式：[开盘, 收盘, 最低, 最高]
+                        itemStyle: {
+                            color: '#26a69a',      // 上涨颜色（绿色）
+                            color0: '#ef5350',     // 下跌颜色（红色）
+                            borderColor: '#26a69a',
+                            borderColor0: '#ef5350'
+                        },
+                        markPoint: (buyPoints.length > 0 || sellPoints.length > 0) ? {
+                            data: [
+                                ...buyPoints,
+                                ...sellPoints
+                            ],
+                            symbol: 'circle',
+                            symbolSize: 25,
+                            label: {
+                                show: true,
+                                position: 'top',
+                                formatter: function(params) {
+                                    return params.data.name || params.name || '';
+                                },
+                                fontSize: 12,
+                                color: '#fff',
+                                fontWeight: 'bold',
+                                backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                                padding: [4, 8],
+                                borderRadius: 4
+                            },
+                            itemStyle: {
+                                borderColor: '#fff',
+                                borderWidth: 2
+                            },
+                            emphasis: {
+                                label: {
+                                    show: true
+                                },
+                                itemStyle: {
+                                    shadowBlur: 10,
+                                    shadowColor: 'rgba(255, 255, 255, 0.5)'
+                                }
+                            }
+                        } : undefined
+                    }] : []),
+                    // 资产价值曲线
                     {
                         name: '资产价值',
                         type: 'line',
+                        yAxisIndex: klineData.length > 0 ? 1 : 0,
+                        xAxisIndex: klineData.length > 0 ? 1 : 0,
                         data: values,
                         smooth: true,
                         lineStyle: { width: 2, color: '#4CAF50' },
@@ -1831,47 +2036,14 @@
                                 { yAxis: initialCash, name: '初始资金', lineStyle: { color: '#999', type: 'dashed' } }
                             ]
                         },
-                        markPoint: (buyPoints.length > 0 || sellPoints.length > 0) ? {
-                            data: [
-                                ...buyPoints,
-                                ...sellPoints
-                            ],
-                            symbol: 'circle',
-                            symbolSize: 18,
-                            label: {
-                                show: true,
-                                position: 'top',
-                                formatter: function(params) {
-                                    return params.data.name || params.name || '';
-                                },
-                                fontSize: 12,
-                                color: '#fff',
-                                fontWeight: 'bold',
-                                backgroundColor: 'rgba(0, 0, 0, 0.5)',
-                                padding: [4, 8],
-                                borderRadius: 4
-                            },
-                            itemStyle: {
-                                borderColor: '#fff',
-                                borderWidth: 2
-                            },
-                            emphasis: {
-                                label: {
-                                    show: true
-                                },
-                                itemStyle: {
-                                    shadowBlur: 10,
-                                    shadowColor: 'rgba(255, 255, 255, 0.5)'
-                                }
-                            }
-                        } : undefined,
                         showSymbol: false
                     },
+                    // 收益率曲线
                     {
                         name: '收益率',
                         type: 'line',
-                        yAxisIndex: 1,
-                        xAxisIndex: 1,
+                        yAxisIndex: klineData.length > 0 ? 2 : 1,
+                        xAxisIndex: klineData.length > 0 ? 2 : 1,
                         data: returns,
                         smooth: true,
                         lineStyle: { width: 1, color: '#26a69a' },

@@ -1220,6 +1220,223 @@ class TrendFollowingStrategy(bt.Strategy):
         self.log(f'期末总价值: {self.broker.getvalue():.2f}')
 
 
+class PyramidAddStrategy(bt.Strategy):
+    """
+    金字塔加仓策略（让利润奔跑，截断止损）
+    
+    核心逻辑：
+    1. 开仓条件：大盘情绪不错（价格在均线之上）+ ETF高开（开盘价 > 前一天收盘价 * (1 + high_open_threshold)）
+    2. 初始仓位：5%
+    3. 止损：-2%（相对于开仓价格），浮亏绝不加仓
+    4. 加仓：价格较上一开仓点位上涨+2%就加仓（盈利后才加仓）
+    5. 让利润奔跑，及时止损
+    
+    参数:
+        initial_position_size: 初始仓位比例（默认0.05，即5%）
+        stop_loss_pct: 止损百分比（默认0.02，即2%）
+        add_position_threshold: 加仓阈值（默认0.02，即2%）
+        ma_period: 均线周期，用于判断大盘情绪（默认20）
+        high_open_threshold: 高开阈值（默认0.01，即1%）
+        printlog: 是否打印日志（默认False）
+    """
+    params = (
+        ('initial_position_size', 0.05),  # 5%初始仓位
+        ('stop_loss_pct', 0.02),  # 2%止损
+        ('add_position_threshold', 0.02),  # 2%加仓阈值
+        ('ma_period', 20),  # 均线周期
+        ('high_open_threshold', 0.01),  # 1%高开阈值
+        ('printlog', False),
+    )
+    
+    def __init__(self):
+        # 均线指标，用于判断大盘情绪
+        self.ma = bt.indicators.SMA(
+            self.data.close,
+            period=self.params.ma_period
+        )
+        
+        self.order = None
+        self.buyprice = None
+        self.buycomm = None
+        
+        # 记录所有开仓点位（用于加仓判断）
+        self.entry_prices = []  # 所有开仓价格
+        self.entry_sizes = []  # 所有开仓仓位（占总资金的比例）
+        
+        # 追踪止损：记录持仓期间的最高价格
+        self.highest_price = None  # 持仓期间的最高价格
+        
+        # 记录资产价值变化（用于绘制收益曲线）
+        object.__setattr__(self, 'equity_curve', [])
+        object.__setattr__(self, 'trade_points', [])
+    
+    def log(self, txt, dt=None):
+        if self.params.printlog:
+            dt = dt or self.datas[0].datetime.date(0)
+            print(f'{dt.isoformat()}, {txt}')
+    
+    def notify_order(self, order):
+        if order.status in [order.Submitted, order.Accepted]:
+            return
+        
+        if order.status in [order.Completed]:
+            current_date = self.datas[0].datetime.date(0) if hasattr(self.datas[0].datetime, 'date') else self.datas[0].datetime.datetime(0)
+            date_str = current_date.isoformat() if hasattr(current_date, 'isoformat') else str(current_date)
+            trade_points = object.__getattribute__(self, 'trade_points')
+            
+            if order.isbuy():
+                self.log(f'买入执行, 价格: {order.executed.price:.2f}, 数量: {order.executed.size}')
+                self.buyprice = order.executed.price
+                self.buycomm = order.executed.comm
+                
+                # 记录开仓点位
+                self.entry_prices.append(float(order.executed.price))
+                position_value = float(order.executed.price * order.executed.size)
+                total_value = float(self.broker.getvalue())
+                position_size = position_value / total_value if total_value > 0 else 0
+                self.entry_sizes.append(position_size)
+                
+                trade_points.append({
+                    'date': date_str,
+                    'type': 'buy',
+                    'price': float(order.executed.price),
+                    'value': float(self.broker.getvalue())
+                })
+            else:
+                self.log(f'卖出执行, 价格: {order.executed.price:.2f}, 数量: {order.executed.size}')
+                trade_points.append({
+                    'date': date_str,
+                    'type': 'sell',
+                    'price': float(order.executed.price),
+                    'value': float(self.broker.getvalue())
+                })
+                
+                # 清仓时重置开仓点位和最高价
+                if not self.position:
+                    self.entry_prices = []
+                    self.entry_sizes = []
+                    self.highest_price = None
+        elif order.status in [order.Canceled, order.Margin, order.Rejected]:
+            self.log('订单取消/保证金不足/拒绝')
+        
+        self.order = None
+    
+    def notify_trade(self, trade):
+        if not trade.isclosed:
+            return
+        self.log(f'交易利润, 净利润: {trade.pnlcomm:.2f}')
+    
+    def next(self):
+        # 记录每个时间点的资产价值
+        current_value = self.broker.getvalue()
+        current_date = self.datas[0].datetime.date(0) if hasattr(self.datas[0].datetime, 'date') else self.datas[0].datetime.datetime(0)
+        equity_curve = object.__getattribute__(self, 'equity_curve')
+        equity_curve.append({
+            'date': current_date.isoformat() if hasattr(current_date, 'isoformat') else str(current_date),
+            'value': current_value,
+            'return_pct': ((current_value - self.broker.startingcash) / self.broker.startingcash) * 100
+        })
+        
+        # 需要足够的数据才能计算均线
+        if len(self.data) < self.params.ma_period + 1:
+            return
+        
+        if self.order:
+            return
+        
+        current_price = self.data.close[0]
+        current_open = self.data.open[0]
+        prev_close = self.data.close[-1] if len(self.data) > 1 else current_price
+        
+        # 判断大盘情绪：价格在均线之上
+        market_sentiment_good = current_price > self.ma[0]
+        
+        # 判断是否高开：开盘价 > 前一天收盘价 * (1 + high_open_threshold)
+        high_open = current_open > prev_close * (1 + self.params.high_open_threshold)
+        
+        if not self.position:
+            # 没有持仓时，检查开仓条件
+            if market_sentiment_good and high_open:
+                # 计算初始仓位（5%）
+                total_value = self.broker.getvalue()
+                position_value = total_value * self.params.initial_position_size
+                size = int(position_value / current_price)
+                
+                if size > 0:
+                    self.log(f'开仓: 价格={current_price:.2f}, 仓位={self.params.initial_position_size*100:.1f}%, 数量={size}')
+                    self.order = self.buy(size=size)
+        else:
+            # 有持仓时，检查止损和加仓
+            if self.entry_prices:
+                # 获取初始开仓价格（用于保底止损判断）
+                initial_entry_price = self.entry_prices[0]
+                # 获取最新的开仓价格（用于加仓判断）
+                latest_entry_price = self.entry_prices[-1]
+                
+                # 更新持仓期间的最高价格（用于追踪止损）
+                if self.highest_price is None:
+                    self.highest_price = current_price
+                else:
+                    self.highest_price = max(self.highest_price, current_price)
+                
+                # 获取当前持仓数量
+                position_size = self.position.size
+                if position_size <= 0:
+                    return
+                
+                # 1. 优先检查追踪止损：如果价格从最高点回撤超过2%，止损卖出
+                # 这是让利润奔跑的关键：基于最高点的回撤止损
+                if self.highest_price and current_price < self.highest_price * (1 - self.params.stop_loss_pct):
+                    drawdown_pct = (1 - current_price / self.highest_price) * 100
+                    self.log(f'追踪止损卖出: 当前价格={current_price:.2f}, 最高价格={self.highest_price:.2f}, 回撤={drawdown_pct:.2f}%, 持仓数量={position_size}, 全部清仓')
+                    self.order = self.sell(size=position_size)
+                    return
+                
+                # 2. 保底止损：如果当前价格 < 初始开仓价格 * (1 - stop_loss_pct)，止损卖出
+                # 这是防止开仓后立即下跌的保护机制
+                if current_price < initial_entry_price * (1 - self.params.stop_loss_pct):
+                    loss_pct = (current_price / initial_entry_price - 1) * 100
+                    self.log(f'保底止损卖出: 当前价格={current_price:.2f}, 初始开仓价格={initial_entry_price:.2f}, 亏损={loss_pct:.2f}%, 持仓数量={position_size}, 全部清仓')
+                    self.order = self.sell(size=position_size)
+                    return
+                
+                # 3. 检查加仓条件：价格较第一次买入价格涨了2%就加仓（盈利后才加仓）
+                # 关键：加仓条件是基于第一次买入价格，而不是最新开仓价格
+                # 浮亏绝不加仓，所以只检查盈利情况（当前价格 > 第一次买入价格 * (1 + add_position_threshold)）
+                if current_price > initial_entry_price * (1 + self.params.add_position_threshold):
+                    # 检查是否已经加过仓（避免重复加仓）
+                    # 如果当前价格已经比最新开仓价格高2%以上，说明已经加过仓了，需要检查是否还能继续加仓
+                    # 但根据用户理解，应该是：如果价格比第一次买入价涨了2%，就加仓5%
+                    # 为了避免重复加仓，需要检查：当前价格是否比最新开仓价格高2%以上
+                    # 如果已经加过仓，且价格继续上涨，需要等待价格比最新开仓价格再涨2%才能继续加仓
+                    
+                    # 如果还没有加过仓（只有一次买入），直接加仓
+                    if len(self.entry_prices) == 1:
+                        # 计算加仓数量（也是5%仓位）
+                        total_value = self.broker.getvalue()
+                        position_value = total_value * self.params.initial_position_size
+                        size = int(position_value / current_price)
+                        
+                        if size > 0:
+                            self.log(f'加仓: 价格={current_price:.2f}, 第一次买入价格={initial_entry_price:.2f}, 涨幅={(current_price/initial_entry_price - 1)*100:.2f}%, 数量={size}')
+                            self.order = self.buy(size=size)
+                    else:
+                        # 如果已经加过仓，需要检查：当前价格是否比最新开仓价格高2%以上
+                        # 这样才能继续加仓（每次加仓都是基于上一次加仓价格再涨2%）
+                        if current_price > latest_entry_price * (1 + self.params.add_position_threshold):
+                            # 计算加仓数量（也是5%仓位）
+                            total_value = self.broker.getvalue()
+                            position_value = total_value * self.params.initial_position_size
+                            size = int(position_value / current_price)
+                            
+                            if size > 0:
+                                self.log(f'继续加仓: 价格={current_price:.2f}, 上一次加仓价格={latest_entry_price:.2f}, 涨幅={(current_price/latest_entry_price - 1)*100:.2f}%, 数量={size}')
+                                self.order = self.buy(size=size)
+    
+    def stop(self):
+        self.log(f'期末总价值: {self.broker.getvalue():.2f}')
+
+
 # 策略注册字典，方便动态调用
 STRATEGY_REGISTRY = {
     'macross': MACrossStrategy,
@@ -1232,4 +1449,5 @@ STRATEGY_REGISTRY = {
     'candlestick': CandlestickStrategy,
     'swing': SwingTradingStrategy,
     'trend_following': TrendFollowingStrategy,
+    'pyramid_add': PyramidAddStrategy,
 }

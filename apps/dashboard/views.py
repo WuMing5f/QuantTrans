@@ -746,6 +746,11 @@ def backtest_view(request):
             'description': '等待趋势确认后入场，跟随趋势进行交易（右侧交易）',
             'params': {'fast_period': 10, 'slow_period': 30, 'adx_period': 14, 'adx_threshold': 25, 'trailing_stop': 0.03}
         },
+        'pyramid_add': {
+            'name': '金字塔加仓策略',
+            'description': '开仓5%仓位，-2%止损，盈利+2%加仓，让利润奔跑，截断止损，浮亏绝不加仓',
+            'params': {'initial_position_size': 0.05, 'stop_loss_pct': 0.02, 'add_position_threshold': 0.02, 'ma_period': 20, 'high_open_threshold': 0.01}
+        },
     }
     
     import json
